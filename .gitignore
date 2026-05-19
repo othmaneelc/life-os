@@ -3,5 +3,6 @@ dist/
 data/
 .env
 *.log
+*.err
 .DS_Store
 Thumbs.db
