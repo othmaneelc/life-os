@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+data/backups/
+*.db-shm
+*.db-wal
 *.log
 *.err
 .DS_Store
