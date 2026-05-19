@@ -305,7 +305,7 @@ const migrations = [
   )`,
 ]
 
-async function runMigrations() {
+function runMigrations() {
   for (const sql of migrations) {
     try {
       run(sql)

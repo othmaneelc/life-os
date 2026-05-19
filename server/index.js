@@ -60,9 +60,9 @@ app.use((err, req, res, next) => {
 })
 
 async function start() {
-  await getDatabase()
+  getDatabase()
   await runMigrations()
-  await seed()
+  seed()
 
   // Restore Google credentials from database as fallback for .env
   try {
