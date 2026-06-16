@@ -1,4 +1,5 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { query } = require('../db/database')
 
 const router = express.Router()
@@ -40,16 +41,33 @@ router.get('/:period', (req, res) => {
     // Tasks done by day for chart
     const tasksByDay = query("SELECT date(completed_at) as day, COUNT(*) as count FROM tasks WHERE status = 'done' AND completed_at >= ? AND completed_at <= ? GROUP BY day ORDER BY day", [start, end])
 
+    // Habits by week
+    const habitsByWeek = query(`SELECT strftime('%Y-%W', date) as week, SUM(done) as done, COUNT(*) as total FROM habit_logs WHERE date >= ? AND date <= ? AND done = 1 GROUP BY week ORDER BY week`, [start, end])
+
+    // Prayers by week
+    const prayersByWeek = query(`SELECT strftime('%Y-%W', date) as week, prayer_name, SUM(done) as done_count FROM prayers WHERE date >= ? AND date <= ? GROUP BY week, prayer_name ORDER BY week`, [start, end])
+
+    // Finance by month
+    const financeByMonth = query(`SELECT strftime('%Y-%m', date) as month, SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as income, SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as expense FROM finance_transactions WHERE date >= ? AND date <= ? GROUP BY month ORDER BY month`, [start, end])
+
+    // Outreach by day
+    const outreachByDay = query('SELECT date, calls_made, dms_sent, responses, meetings_booked FROM outreach_log WHERE date >= ? AND date <= ? ORDER BY date', [start, end])
+
+    // Task completion by week
+    const tasksByWeek = query(`SELECT strftime('%Y-%W', date(completed_at)) as week, COUNT(*) as completed FROM tasks WHERE status = 'done' AND completed_at >= ? AND completed_at <= ? GROUP BY week ORDER BY week`, [start, end])
+
     res.json({
       period,
-      tasks: { total: totalTasks[0]?.count || 0, done: doneTasks[0]?.count || 0, byCategory: tasksByCategory, byDay: tasksByDay },
-      habits: { done: habitLogs[0]?.count || 0, total: totalHabitLogs[0]?.count || 0, rate: totalHabitLogs[0]?.count > 0 ? Math.round(((habitLogs[0]?.count || 0) / totalHabitLogs[0].count) * 100) : 0 },
-      prayers: { done: prayersDone[0]?.count || 0, total: prayersTotal[0]?.count || 0, byPrayer: prayerByDay, rate: prayersTotal[0]?.count > 0 ? Math.round(((prayersDone[0]?.count || 0) / prayersTotal[0].count) * 100) : 0 },
+      tasks: { total: totalTasks[0]?.count || 0, done: doneTasks[0]?.count || 0, byCategory: tasksByCategory, byDay: tasksByDay, byWeek: tasksByWeek },
+      habits: { done: habitLogs[0]?.count || 0, total: totalHabitLogs[0]?.count || 0, rate: totalHabitLogs[0]?.count > 0 ? Math.round(((habitLogs[0]?.count || 0) / totalHabitLogs[0].count) * 100) : 0, byWeek: habitsByWeek },
+      prayers: { done: prayersDone[0]?.count || 0, total: prayersTotal[0]?.count || 0, byPrayer: prayerByDay, byWeek: prayersByWeek, rate: prayersTotal[0]?.count > 0 ? Math.round(((prayersDone[0]?.count || 0) / prayersTotal[0].count) * 100) : 0 },
       revenue: { total: revenue[0]?.total_revenue || 0, expenses: revenue[0]?.total_expenses || 0 },
       pomodoro: { sessions: pomodoroStats[0]?.count || 0, totalMinutes: pomodoroStats[0]?.total_min || 0 },
       reviews: { avgEnergy: reviews[0]?.avg_energy ? parseFloat(reviews[0].avg_energy.toFixed(1)) : 0, total: reviews[0]?.total || 0, completedDays: reviews[0]?.completed_days || 0 },
+      financeByMonth,
+      outreachByDay,
     })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

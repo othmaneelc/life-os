@@ -1,11 +1,16 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
-import { Save, Trash2, Download, Upload, ExternalLink, Check, Key, Bell, FileText, RefreshCw, Sparkles } from 'lucide-react'
+import { Save, Trash2, Download, Upload, ExternalLink, Check, Key, Bell, RefreshCw, Sparkles, Globe, Send, MessageCircle, Smartphone } from 'lucide-react'
+import { useLocale } from '../i18n/LocaleContext'
 import ThemeToggle from '../components/ThemeToggle'
-import { useBackupStore } from '../store/backupStore'
+import BackupPanel from '../components/BackupPanel'
+import { useImportData } from '../store/backupStore'
+import { usePWAInstall } from '../hooks/usePWAInstall'
 
 export default function Settings() {
+  const { locale, setLocale } = useLocale()
+  const { installable, promptInstall } = usePWAInstall()
   const [settings, setSettings] = useState({})
   const [newSettings, setNewSettings] = useState({})
   const [obsidianStatus, setObsidianStatus] = useState(null)
@@ -13,24 +18,60 @@ export default function Settings() {
   const [gcalSyncing, setGcalSyncing] = useState(false)
   const [gcalStatus, setGcalStatus] = useState(null)
   const [clearConfirm, setClearConfirm] = useState('')
+  const [importPreview, setImportPreview] = useState(null)
+  const [importFile, setImportFile] = useState(null)
+  const [telegramRunning, setTelegramRunning] = useState(false)
+  const [telegramRestarting, setTelegramRestarting] = useState(false)
+  const [whatsappConfigured, setWhatsappConfigured] = useState(false)
+  const importMutation = useImportData()
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     fetchSettings()
     fetchGcalStatus()
+    fetchBotStatus()
+    return () => { mountedRef.current = false }
   }, [])
+
+  async function fetchBotStatus() {
+    try {
+      const [tg, wa] = await Promise.all([
+        fetch('/api/bots/telegram/status').then(r => r.ok ? r.json() : ({ running: false })).catch(() => ({ running: false })),
+        fetch('/api/bots/whatsapp/status').then(r => r.ok ? r.json() : ({ configured: false })).catch(() => ({ configured: false })),
+      ])
+      if (!mountedRef.current) return
+      setTelegramRunning(tg.running)
+      setWhatsappConfigured(wa.configured)
+    } catch {}
+  }
+
+  async function handleTelegramRestart() {
+    setTelegramRestarting(true)
+    try {
+      const res = await fetch('/api/bots/telegram/restart', { method: 'POST' })
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setTelegramRunning(data.running)
+      toast.success(data.running ? 'Bot restarted' : 'Failed to start bot (check token)')
+    } catch { toast.error('Failed to restart bot') }
+    finally { setTelegramRestarting(false) }
+  }
 
   async function fetchGcalStatus() {
     try {
       const res = await fetch('/api/calendar/status')
+      if (!res.ok) throw new Error()
       const data = await res.json()
-      if (data.status) setGcalStatus(data.status)
-    } catch {}
+      if (mountedRef.current && data.status) setGcalStatus(data.status)
+    } catch { if (mountedRef.current) console.error('fetchGcalStatus failed') }
   }
 
   async function handleGcalSync() {
     setGcalSyncing(true)
     try {
       const res = await fetch('/api/calendar/sync', { method: 'POST' })
+      if (!res.ok) throw new Error()
       const data = await res.json()
       if (data.error) { toast.error(data.error); return }
       toast.success(`Synced! ${data.result.synced} events`)
@@ -42,11 +83,13 @@ export default function Settings() {
   async function fetchSettings() {
     try {
       const res = await fetch('/api/settings')
+      if (!res.ok) throw new Error()
       const data = await res.json()
+      if (!mountedRef.current) return
       setSettings(data)
       setNewSettings(data)
     } catch (err) {
-      console.error(err)
+      toast.error('Failed to load settings')
     }
   }
 
@@ -67,7 +110,8 @@ export default function Settings() {
 
   async function handleExport() {
     try {
-      const res = await fetch('/api/settings/export', { method: 'POST' })
+      const res = await fetch('/api/export/json')
+      if (!res.ok) throw new Error()
       const data = await res.json()
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -77,8 +121,39 @@ export default function Settings() {
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
-      console.error(err)
+      toast.error('Failed to export data')
     }
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files[0]
+    if (!file) { setImportPreview(null); setImportFile(null); return }
+    setImportFile(file)
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result)
+        const preview = Object.entries(data)
+          .filter(([, rows]) => Array.isArray(rows) && rows.length > 0)
+          .map(([table, rows]) => ({ table, count: rows.length }))
+        setImportPreview(preview)
+      } catch { toast.error('Invalid JSON file'); setImportPreview(null) }
+    }
+    reader.readAsText(file)
+  }
+
+  function handleImport() {
+    if (!importPreview || !importFile) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result)
+        importMutation.mutate(data, {
+          onSuccess: () => { setImportPreview(null); setImportFile(null) },
+        })
+      } catch { toast.error('Failed to read file') }
+    }
+    reader.readAsText(importFile)
   }
 
   async function handleClear() {
@@ -89,7 +164,7 @@ export default function Settings() {
       setSyncStatus('All data cleared')
       setTimeout(() => setSyncStatus(null), 3000)
     } catch (err) {
-      console.error(err)
+      toast.error('Failed to clear data')
     }
   }
 
@@ -168,6 +243,19 @@ export default function Settings() {
         <ThemeToggle />
       </motion.div>
 
+      {/* Language */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.035 }} className="card">
+        <div className="section-label mb-3 flex items-center gap-2"><Globe size={14} className="text-apple-blue" /> Language</div>
+        <div className="flex items-center gap-4">
+          <label className={`flex items-center gap-2 text-small cursor-pointer ${locale === 'en' ? 'text-apple-text font-medium' : 'text-apple-muted'}`}>
+            <input type="radio" name="lang" checked={locale === 'en'} onChange={() => setLocale('en')} className="text-apple-accent" /> English
+          </label>
+          <label className={`flex items-center gap-2 text-small cursor-pointer ${locale === 'ar' ? 'text-apple-text font-medium' : 'text-apple-muted'}`}>
+            <input type="radio" name="lang" checked={locale === 'ar'} onChange={() => setLocale('ar')} className="text-apple-accent" /> العربية
+          </label>
+        </div>
+      </motion.div>
+
       {/* AI API Key */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.033 }} className="card">
         <div className="section-label mb-2 flex items-center gap-2"><Sparkles size={14} className="text-apple-blue" /> AI Assistant</div>
@@ -188,10 +276,56 @@ export default function Settings() {
             <Key size={14} /> Save AI Key
           </motion.button>
         </div>
+        <div className="mt-3">
+          <label className="text-micro text-apple-muted block mb-1">Voice Input Language</label>
+          <select value={newSettings.voice_lang || 'en-US'} onChange={e => handleChange('voice_lang', e.target.value)}
+            className="input-field">
+            <option value="en-US">English (US)</option>
+            <option value="ar-SA">Arabic (Saudi Arabia)</option>
+            <option value="fr-FR">French (France)</option>
+            <option value="es-ES">Spanish (Spain)</option>
+          </select>
+        </div>
+      </motion.div>
+
+      {/* Email Briefing */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.035 }} className="card">
+        <div className="section-label mb-2 flex items-center gap-2"><Send size={14} className="text-apple-blue" /> Daily Email Briefing</div>
+        <p className="text-small text-apple-muted mb-3">Sends the AI briefing to your inbox at a scheduled time each day.</p>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">SMTP Host</label>
+            <input type="text" value={newSettings.briefing_smtp_host || ''} onChange={e => handleChange('briefing_smtp_host', e.target.value)} placeholder="smtp.gmail.com" className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">SMTP Port</label>
+            <input type="number" value={newSettings.briefing_smtp_port || '587'} onChange={e => handleChange('briefing_smtp_port', e.target.value)} className="input-field" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">SMTP User</label>
+            <input type="text" value={newSettings.briefing_smtp_user || ''} onChange={e => handleChange('briefing_smtp_user', e.target.value)} placeholder="your@email.com" className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">SMTP Password</label>
+            <input type="password" value={newSettings.briefing_smtp_pass || ''} onChange={e => handleChange('briefing_smtp_pass', e.target.value)} placeholder="App password" className="input-field" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Recipient Email</label>
+            <input type="email" value={newSettings.briefing_email || ''} onChange={e => handleChange('briefing_email', e.target.value)} placeholder="you@example.com" className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Send Time (24h)</label>
+            <input type="time" value={newSettings.briefing_time || '07:00'} onChange={e => handleChange('briefing_time', e.target.value)} className="input-field" />
+          </div>
+        </div>
       </motion.div>
 
       {/* Google OAuth Writer */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.035 }} className="card">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }} className="card">
         <div className="section-label mb-3">Google OAuth Credentials</div>
         <div className="space-y-2">
           <input id="google-client-id" type="text" placeholder="Google Client ID" className="input-field" />
@@ -214,7 +348,7 @@ export default function Settings() {
       </motion.div>
 
       {/* Google Integration */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }} className="card">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.045 }} className="card">
         <div className="flex items-center justify-between mb-4">
           <div className="section-label">Google Account</div>
           <span className="badge-gray text-micro">OAuth2</span>
@@ -231,7 +365,7 @@ export default function Settings() {
       </motion.div>
 
       {/* Google Calendar Sync */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="card">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.055 }} className="card">
         <div className="flex items-center justify-between mb-4">
           <div className="section-label">Google Calendar Sync</div>
           <span className="badge-gray text-micro">{gcalStatus?.eventCount || 0} events</span>
@@ -282,7 +416,7 @@ export default function Settings() {
 
       {/* Prayer Settings */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }} className="card">
-        <div className="section-label mb-4">Prayer Settings</div>
+        <div className="section-label mb-4 flex items-center gap-2">🕌 Prayer Settings</div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-micro text-apple-muted block mb-1">City</label>
@@ -291,6 +425,7 @@ export default function Settings() {
               value={newSettings.city || 'Casablanca'}
               onChange={e => handleChange('city', e.target.value)}
               className="input-field"
+              placeholder="e.g. Casablanca"
             />
           </div>
           <div>
@@ -300,6 +435,7 @@ export default function Settings() {
               value={newSettings.country || 'Morocco'}
               onChange={e => handleChange('country', e.target.value)}
               className="input-field"
+              placeholder="e.g. Morocco"
             />
           </div>
         </div>
@@ -310,15 +446,32 @@ export default function Settings() {
             onChange={e => handleChange('prayer_method', e.target.value)}
             className="input-field"
           >
-            <option value="2">Muslim World League (Method 2)</option>
-            <option value="1">University of Islamic Sciences, Karachi</option>
-            <option value="3">Egyptian General Authority of Survey</option>
-            <option value="4">Umm Al-Qura, Makkah</option>
-            <option value="5">Dubai</option>
-            <option value="12">Algeria</option>
-            <option value="13">Kuwait</option>
-            <option value="14">Qatar</option>
+            <option value="0">Shia Ithna Ashari (Jafari)</option>
+            <option value="1">University of Islamic Sciences, Karachi (Hanafi)</option>
+            <option value="2">Islamic Society of North America (ISNA)</option>
+            <option value="3">Muslim World League (MWL)</option>
+            <option value="4">Umm Al-Qura University, Makkah</option>
+            <option value="5">Egyptian General Authority of Survey</option>
+            <option value="7">Institute of Geophysics, University of Tehran</option>
+            <option value="8">Gulf Region</option>
+            <option value="9">Kuwait</option>
+            <option value="10">Qatar</option>
+            <option value="11">Majlis Ugama Islam Singapura, Singapore</option>
+            <option value="12">Union Organization islamic de France (UOIF)</option>
+            <option value="13">Diyanet İşleri Başkanlığı, Turkey (Diyanet)</option>
+            <option value="14">Spiritual Administration of Muslims of Russia</option>
           </select>
+        </div>
+        <div className="mt-3 flex items-center justify-between">
+          <div>
+            <div className="text-body font-medium text-apple-text">Adhan Audio</div>
+            <div className="text-small text-apple-muted">Play the call to prayer at each prayer time</div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked={newSettings.notify_adhan !== '0'} onChange={e => handleChange('notify_adhan', e.target.checked ? '1' : '0')}
+              className="sr-only peer" />
+            <div className="w-9 h-5 bg-apple-border rounded-full peer peer-checked:bg-apple-green after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-[var(--toggle-knob)] after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4" />
+          </label>
         </div>
       </motion.div>
 
@@ -350,42 +503,161 @@ export default function Settings() {
         </div>
       </motion.div>
 
-      {/* Backup & Restore */}
+      {/* Push Notifications */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.095 }} className="card">
         <div className="flex items-center gap-2 mb-4">
-          <FileText size={16} className="text-apple-muted" />
-          <div className="section-label">Backup & Restore</div>
+          <Bell size={16} className="text-apple-muted" />
+          <div className="section-label">Push Notifications</div>
         </div>
         <div className="space-y-3">
-          <button onClick={async () => { const b = useBackupStore.getState(); await b.createBackup(); b.fetchBackups() }} className="btn-ghost flex items-center gap-2 border border-apple-border rounded-input px-4 py-2 w-full justify-center">
-            <Download size={16} /> Create Backup
-          </button>
-          <div className="flex gap-2">
-            <input type="file" accept=".json" id="import-file" className="hidden" onChange={async (e) => {
-              const file = e.target.files?.[0]
-              if (!file) return
-              try {
-                const text = await file.text()
-                const data = JSON.parse(text)
-                await useBackupStore.getState().importData(data)
-              } catch { toast.error('Invalid backup file') }
-              e.target.value = ''
-            }} />
-            <button onClick={() => document.getElementById('import-file').click()} className="btn-ghost flex items-center gap-2 border border-apple-border rounded-input px-4 py-2 w-full justify-center">
-              <Upload size={16} /> Import from JSON
+          {[
+            { key: 'push_prayer', label: 'Prayer Reminders', desc: 'Push before each prayer time' },
+            { key: 'push_summary', label: 'Daily Briefing', desc: 'Morning summary every day' },
+            { key: 'push_review', label: 'Evening Review', desc: 'Daily review push at 9 PM' },
+            { key: 'push_weekly', label: 'Weekly Report', desc: 'Weekly summary push on Sunday' },
+          ].map(n => (
+            <div key={n.key} className="flex items-center justify-between py-1">
+              <div>
+                <div className="text-body font-medium text-apple-text ">{n.label}</div>
+                <div className="text-small text-apple-muted">{n.desc}</div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" checked={newSettings[n.key] !== '0'} onChange={e => handleChange(n.key, e.target.checked ? '1' : '0')}
+                  className="sr-only peer" />
+                <div className="w-9 h-5 bg-apple-border rounded-full peer peer-checked:bg-apple-green after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-[var(--toggle-knob)] after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4" />
+              </label>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
+      {/* Keyboard Shortcuts */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.095 }} className="card">
+        <div className="section-label mb-4">Keyboard Shortcuts</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {[
+            { key: 'shortcut_dashboard', label: 'Dashboard', default: 'Ctrl+1' },
+            { key: 'shortcut_schedule', label: 'Schedule', default: 'Ctrl+2' },
+            { key: 'shortcut_tasks', label: 'Tasks', default: 'Ctrl+3' },
+            { key: 'shortcut_journal', label: 'Journal', default: 'Ctrl+4' },
+            { key: 'shortcut_prayers', label: 'Prayer Tracker', default: 'Ctrl+5' },
+            { key: 'shortcut_habits', label: 'Habits', default: 'Ctrl+6' },
+            { key: 'shortcut_agency', label: 'Agency', default: 'Ctrl+7' },
+            { key: 'shortcut_command', label: 'Command Palette', default: 'Ctrl+K' },
+            { key: 'shortcut_goals', label: 'Goals', default: 'Ctrl+8' },
+            { key: 'shortcut_finance', label: 'Finance', default: 'Ctrl+9' },
+            { key: 'shortcut_settings', label: 'Settings', default: 'Ctrl+0' },
+            { key: 'shortcut_search', label: 'Universal Search', default: 'Ctrl+Shift+F' },
+          ].map(s => (
+            <div key={s.key} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-apple-surface transition-colors">
+              <span className="text-small text-apple-text">{s.label}</span>
+              <kbd className="px-2 py-0.5 text-micro font-mono rounded bg-apple-surface border border-apple-border text-apple-muted">
+                {newSettings[s.key] || s.default}
+              </kbd>
+            </div>
+          ))}
+        </div>
+        <p className="text-micro text-apple-muted mt-3">Customize in settings file or edit shortcuts above</p>
+      </motion.div>
+
+      {/* Telegram Bot */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.10 }} className="card">
+        <div className="section-label mb-3 flex items-center gap-2"><MessageCircle size={14} className="text-blue-400" /> Telegram Bot</div>
+        <p className="text-small text-apple-muted mb-3">Connect your Telegram bot to send and process messages. Create a bot via @BotFather on Telegram.</p>
+        <div className="space-y-3 mb-3">
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Bot Token</label>
+            <input type="password" value={newSettings.telegram_bot_token || ''} onChange={e => handleChange('telegram_bot_token', e.target.value)} placeholder="123456:ABC-DEF..." className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Allowed Chat IDs (comma-separated, leave empty for all)</label>
+            <input type="text" value={newSettings.telegram_chat_id || ''} onChange={e => handleChange('telegram_chat_id', e.target.value)} placeholder="123456789, 987654321" className="input-field" />
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-small text-apple-muted">Status: <span className={`font-medium ${telegramRunning ? 'text-green-400' : 'text-red-400'}`}>{telegramRunning ? 'Running' : 'Stopped'}</span></span>
+            <button onClick={handleTelegramRestart} className="btn-ghost flex items-center gap-1.5 border border-apple-border rounded-input px-3 py-1.5 text-small">
+              <RefreshCw size={12} className={telegramRestarting ? 'animate-spin' : ''} /> Restart
             </button>
           </div>
-          <AutoBackupList />
+        </div>
+      </motion.div>
+
+      {/* WhatsApp Bot */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.105 }} className="card">
+        <div className="section-label mb-3 flex items-center gap-2"><Smartphone size={14} className="text-green-400" /> WhatsApp Bot</div>
+        <p className="text-small text-apple-muted mb-3">Powered by Twilio. Set up a WhatsApp Sandbox in your Twilio console and point the webhook to your server.</p>
+        <div className="space-y-3 mb-3">
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Account SID</label>
+            <input type="text" value={newSettings.whatsapp_account_sid || ''} onChange={e => handleChange('whatsapp_account_sid', e.target.value)} placeholder="ACxxxxxxxxxxxx" className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Auth Token</label>
+            <input type="password" value={newSettings.whatsapp_auth_token || ''} onChange={e => handleChange('whatsapp_auth_token', e.target.value)} placeholder="Auth Token" className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Twilio WhatsApp Number</label>
+            <input type="text" value={newSettings.whatsapp_phone_number || ''} onChange={e => handleChange('whatsapp_phone_number', e.target.value)} placeholder="+14155238886" className="input-field" />
+          </div>
+          <div>
+            <label className="text-micro text-apple-muted block mb-1">Webhook URL (set in Twilio Console)</label>
+            <code className="text-micro text-apple-blue block p-2 rounded bg-apple-surface break-all">{window.location.origin}/api/webhooks/whatsapp</code>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-small text-apple-muted">Status: <span className={`font-medium ${whatsappConfigured ? 'text-green-400' : 'text-yellow-400'}`}>{whatsappConfigured ? 'Configured' : 'Not configured'}</span></span>
+          </div>
         </div>
       </motion.div>
 
       {/* Data Management */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.10 }} className="card">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.11 }} className="card">
         <div className="section-label mb-4">Data</div>
         <div className="space-y-4">
           <button onClick={handleExport} className="btn-ghost flex items-center gap-2 border border-apple-border rounded-input px-4 py-2 w-full justify-center">
             <Download size={16} /> Export All Data (JSON)
           </button>
+          <div className="grid grid-cols-2 gap-2">
+            {['tasks', 'habits', 'journal_entries', 'finance_transactions'].map(t => (
+              <a key={t} href={`/api/export/csv/${t}`} download
+                className="btn-ghost flex items-center gap-1.5 border border-apple-border rounded-input px-3 py-1.5 text-small justify-center"
+              >
+                <Download size={12} /> {t.replace('_', ' ').replace('entries', 'journal')}
+              </a>
+            ))}
+          </div>
+
+          <button onClick={async () => {
+            try {
+              await fetch('/api/search/reindex', { method: 'POST' })
+              toast.success('Search index rebuilt')
+            } catch { toast.error('Failed to rebuild search index') }
+          }} className="btn-ghost flex items-center gap-2 border border-apple-border rounded-input px-4 py-2 w-full justify-center">
+            <RefreshCw size={16} /> Rebuild Search Index
+          </button>
+
+          {/* Import */}
+          <div className="pt-3 border-t border-apple-border">
+            <label className="section-label block mb-2">Import Data</label>
+            <p className="text-small text-apple-red mb-2">This will replace all existing data. Backup first!</p>
+            <input type="file" accept=".json" onChange={handleFileSelect} className="input-field text-small mb-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-small file:bg-apple-surface file:text-apple-text" />
+            {importPreview && (
+              <div className="mb-3 p-3 rounded-lg bg-apple-surface">
+                <p className="text-small font-medium text-apple-text mb-2">Tables to import:</p>
+                {importPreview.map(({ table, count }) => (
+                  <div key={table} className="flex justify-between text-small text-apple-muted">
+                    <span>{table}</span>
+                    <span>{count} rows</span>
+                  </div>
+                ))}
+                <motion.button whileTap={{ scale: 0.97 }} onClick={handleImport} disabled={importMutation.isPending}
+                  className="btn-primary flex items-center gap-2 w-full justify-center mt-3"
+                >
+                  <Upload size={14} /> {importMutation.isPending ? 'Importing...' : 'Import'}
+                </motion.button>
+              </div>
+            )}
+          </div>
+
           <div className="pt-3 border-t border-apple-border">
             <label className="section-label block mb-2 text-apple-red">Danger Zone</label>
             <p className="text-small text-apple-muted mb-2">Type DELETE to confirm clearing all data</p>
@@ -409,10 +681,25 @@ export default function Settings() {
         </div>
       </motion.div>
 
+      {/* Backup & Restore */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.11 }}>
+        <BackupPanel />
+      </motion.div>
+
+      {installable && (
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.115 }} className="card">
+          <div className="section-label mb-2 flex items-center gap-2"><Smartphone size={14} className="text-apple-blue" /> App Install</div>
+          <p className="text-small text-apple-muted mb-3">Install Life OS on your device for offline access and a native-like experience.</p>
+          <motion.button whileTap={{ scale: 0.97 }} onClick={promptInstall} className="btn-primary flex items-center gap-2 text-small">
+            <Download size={14} /> Install App
+          </motion.button>
+        </motion.div>
+      )}
+
       {/* App Info */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }} className="card text-center">
         <p className="text-subheading font-semibold">Life OS v1.0</p>
-        <p className="text-body text-apple-muted mt-1">Built for: Othmane Elcaidi</p>
+        <p className="text-body text-apple-muted mt-1">Life OS</p>
         <p className="text-small text-apple-muted">Built with: React + Vite + SQLite + Express</p>
         <p className="text-small text-apple-tertiary italic mt-2">
           "Built in public. Rooted in faith. No shortcuts."
@@ -427,33 +714,4 @@ export default function Settings() {
   )
 }
 
-function AutoBackupList() {
-  const { backups, loading, fetchBackups, restoreBackup } = useBackupStore()
-  const [expanded, setExpanded] = useState(false)
 
-  useEffect(() => { fetchBackups() }, [])
-
-  return (
-    <div className="pt-2 border-t border-apple-border">
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-small text-apple-muted hover:text-apple-text transition-colors w-full text-left">
-        <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-        {backups.length} backups available
-        <span className="ml-auto">{expanded ? '▲' : '▼'}</span>
-      </button>
-      {expanded && (
-        <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
-          {backups.length === 0 && <p className="text-small text-apple-muted text-center py-2">No backups yet</p>}
-          {backups.map(b => (
-            <div key={b.name} className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-apple-surface transition-colors">
-              <div className="min-w-0 flex-1">
-                <div className="text-small truncate text-apple-text ">{b.name}</div>
-                <div className="text-micro text-apple-muted">{(b.size / 1024).toFixed(1)} KB · {new Date(b.created).toLocaleString()}</div>
-              </div>
-              <button onClick={() => restoreBackup(b.name)} className="btn-ghost text-small px-2 py-1">Restore</button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}

@@ -12,6 +12,7 @@ function ClientCard({ client }) {
   const progress = totalDays > 0 ? (elapsed / totalDays) * 100 : 0
 
   const statusColor = remaining > 30 ? 'text-apple-green' : remaining > 10 ? 'text-apple-amber' : 'text-apple-red'
+  const isUrgent = remaining > 0 && remaining <= 7
   const isCDZ = client.name?.includes('CDZ') || client.name?.includes('Zahir')
 
   return (
@@ -34,7 +35,10 @@ function ClientCard({ client }) {
             <p className="text-small text-apple-muted">{client.contact_name}</p>
           </div>
         </div>
-        <span className={`text-small font-medium whitespace-nowrap ${statusColor}`}>{remaining} days left</span>
+        <motion.span
+          animate={isUrgent ? { scale: [1, 1.05, 1], opacity: [1, 0.6, 1] } : {}}
+          transition={isUrgent ? { duration: 1.5, repeat: Infinity } : {}}
+          className={`text-small font-medium whitespace-nowrap ${statusColor}`}>{remaining} days left</motion.span>
       </div>
 
       {/* Dr. Zahir Photo Row */}

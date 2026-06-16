@@ -97,7 +97,7 @@ export const categoryColors = {
   Faith: '#34C759',
   Health: '#FF3B30',
   Mental: '#AF52DE',
-  Learning: '#0071E3',
+  Learning: '#5B5BD6',
   Productivity: '#FF9F0A',
   Business: '#FF6482',
   Finance: '#34C759',

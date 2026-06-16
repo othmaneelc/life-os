@@ -3,6 +3,7 @@ const path = require('path')
 const { v4: uuidv4 } = require('uuid')
 const chokidar = require('chokidar')
 const { get, query, run } = require('../db/database')
+const logger = require('./logger')
 
 function getVaultPath() {
   const setting = get('SELECT value FROM settings WHERE key = ?', ['obsidian_path'])
@@ -10,6 +11,9 @@ function getVaultPath() {
   let vaultPath = setting.value
   if (vaultPath.startsWith('~/')) {
     vaultPath = path.join(process.env.HOME || process.env.USERPROFILE, vaultPath.slice(2))
+  }
+  if (!fs.existsSync(vaultPath)) {
+    logger.warn({ vaultPath }, 'Obsidian vault path not found')
   }
   return vaultPath
 }
@@ -85,7 +89,7 @@ function parseMarkdownToEntry(filePath) {
 
     return { date, mood, what_happened: whatHappened, gratitude, muhasaba, tomorrow_intention: tomorrowIntention, tags }
   } catch (err) {
-    console.error('Error parsing Obsidian file:', err.message)
+    logger.error({ err }, 'Error parsing Obsidian file')
     return null
   }
 }
@@ -100,7 +104,7 @@ function syncToObsidian(entry) {
     const markdown = entryToMarkdown(entry)
     fs.writeFileSync(filePath, markdown, 'utf-8')
   } catch (err) {
-    console.error('Obsidian sync error:', err.message)
+    logger.error({ err }, 'Obsidian sync error')
   }
 }
 
@@ -126,9 +130,9 @@ function importFromObsidian() {
         imported++
       }
     }
-    if (imported > 0) console.log(`Imported ${imported} journal entries from Obsidian`)
+    if (imported > 0) logger.info({ imported }, 'Imported journal entries from Obsidian')
   } catch (err) {
-    console.error('Obsidian import error:', err.message)
+    logger.error({ err }, 'Obsidian import error')
   }
 }
 
@@ -167,11 +171,11 @@ function startWatcher() {
             [uuidv4(), entry.date, entry.mood, entry.what_happened, entry.gratitude, entry.muhasaba, entry.tomorrow_intention, entry.tags])
         }
       } catch (err) {
-        console.error('Obsidian file change handler error:', err.message)
+        logger.error({ err }, 'Obsidian file change handler error')
       }
     })
   } catch (err) {
-    console.error('Obsidian watcher error:', err.message)
+    logger.error({ err }, 'Obsidian watcher error')
   }
 }
 

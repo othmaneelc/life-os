@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { Check, X, Flame } from 'lucide-react'
 import { useHabitStore } from '../store/habitStore'
@@ -7,22 +7,24 @@ import { getTodayStr } from '../utils/dateHelpers'
 function HabitRow({ habit, weekStart, weekEnd, showName = true, index = 0 }) {
   const toggleLog = useHabitStore(s => s.toggleLog)
 
-  function getDaysArray() {
-    const days = []
+  const days = useMemo(() => {
+    const result = []
     const start = new Date(weekStart)
     const end = new Date(weekEnd)
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      days.push(new Date(d).toISOString().split('T')[0])
+      result.push(new Date(d).toISOString().split('T')[0])
     }
-    return days
-  }
+    return result
+  }, [weekStart, weekEnd])
 
-  const days = getDaysArray()
   const today = getTodayStr()
 
-  function isDone(date) {
-    return habit.logs?.some(l => l.date === date && l.done)
-  }
+  const isDone = useMemo(() => {
+    const doneSet = new Set(
+      (habit.logs || []).filter(l => l.done).map(l => l.date)
+    )
+    return (date) => doneSet.has(date)
+  }, [habit.logs])
 
   const streak = habit.streak || 0
   const weeklyDone = days.filter(d => isDone(d)).length

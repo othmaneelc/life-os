@@ -1,17 +1,7 @@
-export function classNames(...classes) {
-  return classes.filter(Boolean).join(' ')
-}
-
 export const categoryColors = {
   urgent: 'text-apple-red',
   business: 'text-apple-blue',
   personal: 'text-apple-purple',
-}
-
-export const categoryBadges = {
-  urgent: 'badge-red',
-  business: 'badge-blue',
-  personal: 'badge-purple',
 }
 
 export const priorityStyles = {
@@ -38,6 +28,34 @@ export const prayerIcons = {
   fajr: '🌙', dhuhr: '☀️', asr: '🌤️',
   maghrib: '🌇', isha: '🌙',
 }
+export const prayerTimeColors = {
+  fajr: '#5B5BD6', sunrise: '#FF9F0A', dhuhr: '#0071E3',
+  asr: '#AF52DE', maghrib: '#FF3B30', isha: '#34C759',
+}
+export const prayerTimeGradients = {
+  fajr: 'linear-gradient(135deg, #1a1a2e, #16213e)',
+  sunrise: 'linear-gradient(135deg, #f12711, #f5af19)',
+  dhuhr: 'linear-gradient(135deg, #0071E3, #00C6FB)',
+  asr: 'linear-gradient(135deg, #AF52DE, #5B5BD6)',
+  maghrib: 'linear-gradient(135deg, #FF3B30, #FF9F0A)',
+  isha: 'linear-gradient(135deg, #0f0c29, #302b63)',
+}
+export const PRAYER_METHODS = [
+  { id: 0, name: 'Shia Ithna Ashari (Jafari)', region: 'Shia' },
+  { id: 1, name: 'University of Islamic Sciences, Karachi', region: 'Hanafi' },
+  { id: 2, name: 'Islamic Society of North America (ISNA)', region: 'North America' },
+  { id: 3, name: 'Muslim World League (MWL)', region: 'Europe / Far East' },
+  { id: 4, name: 'Umm Al-Qura University, Makkah', region: 'Arabian Peninsula' },
+  { id: 5, name: 'Egyptian General Authority of Survey', region: 'Africa' },
+  { id: 7, name: 'Institute of Geophysics, University of Tehran', region: 'Iran' },
+  { id: 8, name: 'Gulf Region', region: 'Gulf' },
+  { id: 9, name: 'Kuwait', region: 'Kuwait' },
+  { id: 10, name: 'Qatar', region: 'Qatar' },
+  { id: 11, name: 'Majlis Ugama Islam Singapura, Singapore', region: 'Singapore' },
+  { id: 12, name: 'Union Organization islamic de France (UOIF)', region: 'France' },
+  { id: 13, name: 'Diyanet İşleri Başkanlığı, Turkey (Diyanet)', region: 'Turkey' },
+  { id: 14, name: 'Spiritual Administration of Muslims of Russia', region: 'Russia' },
+]
 
 export const moodEmojis = ['😔', '🙁', '🙂', '😊', '🔥']
 
@@ -62,20 +80,6 @@ export const prospectStatuses = [
   { value: 'closed_won', label: 'Closed — Won', color: 'badge-green' },
   { value: 'closed_lost', label: 'Closed — Lost', color: 'badge-red' },
 ]
-
-export const blockTypeColors = {
-  Prayer: '#34C759',
-  Faith: '#34C759',
-  Rest: '#8E8E93',
-  Training: '#FF3B30',
-  Personal: '#8E8E93',
-  Work: '#0071E3',
-  Agency: '#FF9F0A',
-  Brand: '#AF52DE',
-  Learning: '#AF52DE',
-  Reflection: '#AF52DE',
-  Planning: '#0071E3',
-}
 
 export const motivations = [
   'Built in public. Rooted in faith. No shortcuts.',

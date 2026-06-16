@@ -49,21 +49,6 @@ export function getDaysElapsed(start, end) {
   return Math.min(Math.max(elapsed, 0), total)
 }
 
-const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December']
-
-export function getCurrentMonthName() {
-  return monthNames[new Date().getMonth()]
-}
-
-export function getCurrentYear() {
-  return new Date().getFullYear()
-}
-
-export function getMonthYear(monthName, year) {
-  return `${monthName} ${year}`
-}
-
 export function parseTime(timeStr) {
   const [h, m] = timeStr.split(':').map(Number)
   return { h, m }

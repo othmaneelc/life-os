@@ -1,13 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
-import { Plus } from 'lucide-react'
+import { useState, useEffect, useRef, memo } from 'react'
+import { Plus, Repeat } from 'lucide-react'
 import Modal from './Modal'
 import { motion } from 'framer-motion'
 import { useTaskStore } from '../store/taskStore'
 
-export default function QuickAddModal({ open, onClose }) {
+const QuickAddModal = memo(function QuickAddModal({ open, onClose }) {
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('business')
   const [tag, setTag] = useState('')
+  const [recurrence, setRecurrence] = useState('')
   const addTask = useTaskStore(s => s.addTask)
   const inputRef = useRef(null)
 
@@ -20,9 +21,10 @@ export default function QuickAddModal({ open, onClose }) {
   function handleSubmit(e) {
     e.preventDefault()
     if (!title.trim()) return
-    addTask({ title: title.trim(), category, tag: tag || undefined, priority: 'medium', status: 'todo' })
+    addTask({ title: title.trim(), category, tag: tag || undefined, priority: 'medium', status: 'todo', recurrence: recurrence || undefined })
     onClose()
     setTitle('')
+    setRecurrence('')
   }
 
   return (
@@ -46,6 +48,15 @@ export default function QuickAddModal({ open, onClose }) {
             <option value="Faith">Faith</option>
           </select>
         </div>
+        <div className="flex items-center gap-2 mb-4">
+          <Repeat size={14} className="text-apple-muted" />
+          <select value={recurrence} onChange={e => setRecurrence(e.target.value)} className="input-field flex-1">
+            <option value="">No repeat</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
         <motion.button whileTap={{ scale: 0.97 }} type="submit"
           className="btn-primary w-full flex items-center justify-center gap-2">
           <Plus size={16} /> Add Task
@@ -53,4 +64,6 @@ export default function QuickAddModal({ open, onClose }) {
       </form>
     </Modal>
   )
-}
+})
+
+export default QuickAddModal

@@ -1,4 +1,5 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { v4: uuidv4 } = require('uuid')
 const { query, run, get } = require('../db/database')
 
@@ -37,7 +38,7 @@ function recalculateBudgetSpending(month, year) {
 // Transactions
 router.get('/transactions', (req, res) => {
   try {
-    const { month, year, type, is_personal } = req.query
+    const { month, year, type, is_personal, page: pageStr, limit: limitStr } = req.query
     let sql = 'SELECT * FROM finance_transactions WHERE 1=1'
     const params = []
     if (month && year) {
@@ -47,38 +48,61 @@ router.get('/transactions', (req, res) => {
     if (type) { sql += ` AND type = ?`; params.push(type) }
     if (is_personal !== undefined) { sql += ` AND is_personal = ?`; params.push(parseInt(is_personal)) }
     sql += ' ORDER BY date DESC'
+    if (pageStr) {
+      const page = Math.max(1, parseInt(pageStr) || 1)
+      const limit = Math.min(200, Math.max(1, parseInt(limitStr) || 50))
+      const offset = (page - 1) * limit
+      let countSql = 'SELECT COUNT(*) as count FROM finance_transactions WHERE 1=1'
+      const countParams = [...params]
+      if (month && year) { countSql += ` AND strftime('%m', date) = ? AND strftime('%Y', date) = ?` }
+      if (type) { countSql += ` AND type = ?` }
+      if (is_personal !== undefined) { countSql += ` AND is_personal = ?` }
+      const total = get(countSql, [...countParams]).count
+      const data = query(sql + ' LIMIT ? OFFSET ?', [...params, limit, offset])
+      return res.json({ data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } })
+    }
     res.json(query(sql, params))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/transactions', (req, res) => {
   try {
     const { date, type, category, amount, description, client, is_personal } = req.body
+    const validTypes = ['income', 'expense']
+    if (!type || !validTypes.includes(type)) return res.status(400).json({ error: 'type must be income or expense' })
+    if (amount === undefined || amount === null || isNaN(amount) || Number(amount) < 0) return res.status(400).json({ error: 'amount must be a non-negative number' })
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD format' })
     const id = uuidv4()
     run(`INSERT INTO finance_transactions (id, date, type, category, amount, description, client, is_personal)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, date, type, category, amount, description || '', client || null, is_personal ? 1 : 0])
+      [id, date, type, category || 'Other', Number(amount), description || '', client || null, is_personal ? 1 : 0])
     // Recalculate budget spending
     if (type === 'expense' && date) {
       const [y, m] = date.split('-')
       recalculateBudgetSpending(m, y)
     }
     res.json(get('SELECT * FROM finance_transactions WHERE id = ?', [id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.put('/transactions/:id', (req, res) => {
   try {
     const { date, type, category, amount, description, client, is_personal } = req.body
-    run(`UPDATE finance_transactions SET date=?, type=?, category=?, amount=?, description=?, client=?, is_personal=? WHERE id=?`,
-      [date, type, category, amount, description || '', client || null, is_personal ? 1 : 0, req.params.id])
+    const validTypes = ['income', 'expense']
+    if (type && !validTypes.includes(type)) return res.status(400).json({ error: 'type must be income or expense' })
+    if (amount !== undefined && amount !== null && (isNaN(amount) || Number(amount) < 0)) return res.status(400).json({ error: 'amount must be a non-negative number' })
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Invalid date format (expected YYYY-MM-DD)' })
+    }
+    run(`UPDATE finance_transactions SET date=COALESCE(?,date), type=COALESCE(?,type), category=COALESCE(?,category), amount=COALESCE(?,amount), description=COALESCE(?,description), client=COALESCE(?,client), is_personal=COALESCE(?,is_personal) WHERE id=?`,
+      [date ?? null, type ?? null, category ?? null, amount ?? null, description ?? null, client ?? null, is_personal !== undefined ? (is_personal ? 1 : 0) : null, req.params.id])
     // Recalculate budget spending for affected months
     if (type === 'expense' && date) {
       const [y, m] = date.split('-')
       recalculateBudgetSpending(m, y)
     }
     res.json(get('SELECT * FROM finance_transactions WHERE id = ?', [req.params.id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/transactions/:id', (req, res) => {
@@ -91,7 +115,7 @@ router.delete('/transactions/:id', (req, res) => {
       recalculateBudgetSpending(m, y)
     }
     res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 // Budget categories
@@ -110,7 +134,7 @@ router.get('/budgets', (req, res) => {
       })
     }
     res.json(categories)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/budgets', (req, res) => {
@@ -125,14 +149,14 @@ router.post('/budgets', (req, res) => {
         [newId, name, monthly_limit, color || '#0071E3', icon || ''])
     }
     res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/budgets/:id', (req, res) => {
   try {
     run('UPDATE budget_categories SET active = 0 WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 // Reports
@@ -149,7 +173,7 @@ router.get('/reports', (req, res) => {
       GROUP BY strftime('%Y-%m', date)
       ORDER BY month`, [start, end])
     res.json(rows)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 // Summary
@@ -185,7 +209,57 @@ router.get('/summary', (req, res) => {
       personalExpense: personalExpense.total,
       budgetAlerts,
     })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
+})
+
+// Debts / Loans
+router.get('/debts', (req, res) => {
+  try {
+    res.json(query('SELECT * FROM debts ORDER BY created_at DESC'))
+  } catch (err) { handleError(res, err) }
+})
+
+router.post('/debts', (req, res) => {
+  try {
+    const { type, person_name, amount, remaining, interest_rate, due_date, status, description } = req.body
+    const validTypes = ['lent', 'borrowed']
+    if (!type || !validTypes.includes(type)) return res.status(400).json({ error: 'type must be lent or borrowed' })
+    if (amount === undefined || amount === null || isNaN(amount) || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be a positive number' })
+    if (!person_name || !person_name.trim()) return res.status(400).json({ error: 'person_name is required' })
+    const id = uuidv4()
+    run(`INSERT INTO debts (id, type, person_name, amount, remaining, interest_rate, due_date, status, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, type, person_name.trim(), Number(amount), remaining !== undefined ? Number(remaining) : Number(amount), Number(interest_rate || 0), due_date || null, status || 'active', description || null])
+    res.json(get('SELECT * FROM debts WHERE id = ?', [id]))
+  } catch (err) { handleError(res, err) }
+})
+
+router.put('/debts/:id', (req, res) => {
+  try {
+    const fields = []
+    const params = []
+    const allowed = ['type', 'person_name', 'amount', 'remaining', 'interest_rate', 'due_date', 'status', 'description']
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        if (key === 'type') {
+          if (!['lent', 'borrowed'].includes(req.body[key])) return res.status(400).json({ error: 'type must be lent or borrowed' })
+        }
+        fields.push(`${key} = ?`)
+        params.push(req.body[key])
+      }
+    }
+    fields.push("updated_at = datetime('now')")
+    params.push(req.params.id)
+    run(`UPDATE debts SET ${fields.join(', ')} WHERE id = ?`, params)
+    res.json(get('SELECT * FROM debts WHERE id = ?', [req.params.id]))
+  } catch (err) { handleError(res, err) }
+})
+
+router.delete('/debts/:id', (req, res) => {
+  try {
+    run('DELETE FROM debts WHERE id = ?', [req.params.id])
+    res.json({ success: true })
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

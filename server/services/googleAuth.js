@@ -1,5 +1,6 @@
 const { google } = require('googleapis')
 const { get, run } = require('../db/database')
+const logger = require('./logger')
 
 let oauth2Client = null
 
@@ -20,7 +21,7 @@ function getOAuth2Client() {
   if (stored) {
     try {
       oauth2Client.setCredentials(JSON.parse(stored.value))
-    } catch (e) { console.error('Failed to parse stored Google tokens:', e.message) }
+    } catch (e) { logger.error({ err: e }, 'Failed to parse stored Google tokens') }
   }
 
   return oauth2Client
@@ -34,7 +35,7 @@ function getGoogleAuth() {
   return client
 }
 
-function getAuthUrl() {
+function getAuthUrl(state) {
   const client = getOAuth2Client()
   if (!client) return null
   return client.generateAuthUrl({
@@ -43,10 +44,16 @@ function getAuthUrl() {
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/tasks',
     ],
+    state,
   })
 }
 
-async function handleCallback(code) {
+async function handleCallback(code, state) {
+  const expected = get('SELECT value FROM settings WHERE key = ?', ['oauth_state'])
+  if (expected && state !== expected.value) {
+    throw new Error('Invalid OAuth state — possible CSRF attack')
+  }
+  run('DELETE FROM settings WHERE key = ?', ['oauth_state'])
   const client = getOAuth2Client()
   const { tokens } = await client.getToken(code)
   client.setCredentials(tokens)

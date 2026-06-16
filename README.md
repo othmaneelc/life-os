@@ -13,12 +13,9 @@ A fully local, personal Life Operating System — your single source of truth fo
 | Frontend | React 18 + Vite |
 | Styling | Tailwind CSS v3 (Apple-style design system) |
 | State | Zustand |
-| Database | SQLite via sql.js (local file, no server) |
-| Backend | Express.js (thin API layer) |
+| Database | SQLite via better-sqlite3 |
+| Backend | Express.js REST API |
 | Charts | Recharts |
-| Icons | Lucide React |
-| Rich Text | TipTap |
-| Date/Time | date-fns |
 | Icons | Lucide React |
 
 ---
@@ -180,7 +177,7 @@ life-os/
 
 ## Database
 
-The app uses SQLite (via sql.js) stored at `data/lifeos.db`. All data stays on your machine. No cloud, no servers, no subscriptions.
+The app uses SQLite (via better-sqlite3) stored at `data/lifeos.db`. All data stays on your machine. The Express API server is required to run — this is not a serverless app.
 
 ### Tables: tasks, journal_entries, prayers, prayer_times_cache, habits, habit_logs, clients, prospects, revenue, outreach_log, schedule_blocks, settings
 

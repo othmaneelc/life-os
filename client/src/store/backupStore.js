@@ -1,9 +1,23 @@
-import { create } from 'zustand'
+import { createWithEqualityFn } from 'zustand/traditional'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 
 const API = '/api/backup'
 
-export const useBackupStore = create((set) => ({
+export function useImportData() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (data) => {
+      const r = await fetch(`${API}/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => { qc.invalidateQueries(); toast.success('Data imported') },
+    onError: () => toast.error('Failed to import data'),
+  })
+}
+
+export const useBackupStore = createWithEqualityFn((set) => ({
   backups: [],
   loading: false,
 
@@ -48,4 +62,4 @@ export const useBackupStore = create((set) => ({
       return result
     } catch { toast.error('Failed to import data') }
   },
-}))
+}), Object.is)

@@ -1,4 +1,5 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { v4: uuidv4 } = require('uuid')
 const { query, run, get } = require('../db/database')
 
@@ -18,7 +19,7 @@ router.get('/', (req, res) => {
     noteCounts.forEach(n => { countsMap[n.book_id] = n.count })
     books.forEach(b => { b.note_count = countsMap[b.id] || 0 })
     res.json(books)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/', (req, res) => {
@@ -29,7 +30,7 @@ router.post('/', (req, res) => {
     run('INSERT INTO books (id, title, author, genre, total_pages, current_page, cover_url, status, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
       [id, title, author || '', genre || '', total_pages || 0, current_page || 0, cover_url || null, status || 'want_to_read', (maxOrder?.max || 0) + 1])
     res.json(get('SELECT * FROM books WHERE id = ?', [id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.put('/:id', (req, res) => {
@@ -38,7 +39,7 @@ router.put('/:id', (req, res) => {
     run(`UPDATE books SET title=COALESCE(?,title), author=COALESCE(?,author), genre=COALESCE(?,genre), status=COALESCE(?,status), total_pages=COALESCE(?,total_pages), current_page=COALESCE(?,current_page), rating=?, cover_url=?, start_date=COALESCE(?,start_date), finish_date=COALESCE(?,finish_date), notes_summary=COALESCE(?,notes_summary) WHERE id=?`,
       [title, author, genre, status, total_pages, current_page, rating ?? null, cover_url ?? null, start_date, finish_date, notes_summary, req.params.id])
     res.json(get('SELECT * FROM books WHERE id = ?', [req.params.id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/:id', (req, res) => {
@@ -46,7 +47,7 @@ router.delete('/:id', (req, res) => {
     run('DELETE FROM book_notes WHERE book_id = ?', [req.params.id])
     run('DELETE FROM books WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 // Notes
@@ -54,7 +55,7 @@ router.get('/:bookId/notes', (req, res) => {
   try {
     const notes = query('SELECT * FROM book_notes WHERE book_id = ? ORDER BY created_at DESC', [req.params.bookId])
     res.json(notes)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/:bookId/notes', (req, res) => {
@@ -64,7 +65,7 @@ router.post('/:bookId/notes', (req, res) => {
     run('INSERT INTO book_notes (id, book_id, chapter, content, type, page) VALUES (?,?,?,?,?,?)',
       [id, req.params.bookId, chapter || null, content, type || 'note', page || null])
     res.json(get('SELECT * FROM book_notes WHERE id = ?', [id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.put('/:bookId/notes/:id', (req, res) => {
@@ -73,14 +74,14 @@ router.put('/:bookId/notes/:id', (req, res) => {
     run('UPDATE book_notes SET chapter=COALESCE(?,chapter), content=COALESCE(?,content), type=COALESCE(?,type), page=? WHERE id=?',
       [chapter, content, type, page ?? null, req.params.id])
     res.json(get('SELECT * FROM book_notes WHERE id = ?', [req.params.id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/:bookId/notes/:id', (req, res) => {
   try {
     run('DELETE FROM book_notes WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

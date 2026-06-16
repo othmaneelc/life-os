@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, FileText, Download, ArrowLeft, ArrowRight, Sparkles, Image, Bold, Italic, Code, Quote, List, ListOrdered, Link as LinkIcon, CheckSquare, Eye, PenLine, X } from 'lucide-react'
-import { useJournalStore } from '../store/journalStore'
+import { Search, FileText, Download, ArrowLeft, ArrowRight, Sparkles, Image, Bold, Italic, Code, Quote, List, ListOrdered, CheckSquare, Eye, PenLine, X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { useJournalEntries, useJournalEntry, useSaveEntry, useDeleteEntry, useUploadPhoto, useDeletePhoto, useMoodTrend, useJournalPhotos } from '../store/journalStore'
 import { useAIStore } from '../store/aiStore'
 import { moodEmojis } from '../utils/formatters'
-import { getTodayStr, getFormattedDate } from '../utils/dateHelpers'
+const MarkdownMessage = lazy(() => import('../components/MarkdownMessage'))
+import { extractArray } from '../utils/api'
+import { getTodayStr } from '../utils/dateHelpers'
 
 const WRITE_PROMPTS = [
   "What made you smile today?",
@@ -26,23 +29,7 @@ function formatDateShort(dateStr) {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
-function applyMarkdown(text) {
-  if (!text) return ''
-  return text
-    .replace(/### (.+)/g, '<h3 class="text-subheading font-semibold mt-4 mb-1">$1</h3>')
-    .replace(/## (.+)/g, '<h2 class="text-heading font-semibold mt-5 mb-2">$1</h2>')
-    .replace(/# (.+)/g, '<h1 class="text-hero font-semibold mt-6 mb-3">$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code class="bg-apple-surface px-1.5 py-0.5 rounded text-small font-mono">$1</code>')
-    .replace(/^- (.+)/gm, '<li class="flex items-start gap-2 ml-4"><span class="text-apple-muted mt-1">•</span><span>$1</span></li>')
-    .replace(/\[ \] (.+)/gm, '<li class="flex items-start gap-2 ml-4"><span class="w-3.5 h-3.5 mt-0.5 rounded border border-apple-border flex-shrink-0 inline-block" /><span>$1</span></li>')
-    .replace(/\[x\] (.+)/gm, '<li class="flex items-start gap-2 ml-4"><span class="w-3.5 h-3.5 mt-0.5 rounded bg-apple-green flex items-center justify-center flex-shrink-0 inline-block text-[8px] text-white">✓</span><span class="line-through text-apple-tertiary">$1</span></li>')
-    .replace(/> (.+)/gm, '<blockquote class="border-l-2 border-apple-blue/30 pl-3 py-1 my-2 text-apple-muted italic">$1</blockquote>')
-    .replace(/\n\n/g, '</p><p class="mb-2">')
-    .replace(/\n/g, '<br />')
-  return `<p class="mb-2">${text}</p>`
-}
+
 
 function applyBold(text, selStart, selEnd) {
   if (selStart === selEnd) return { text, selStart, selEnd }
@@ -60,6 +47,8 @@ function applyItalic(text, selStart, selEnd) {
   return { text: `${before}*${selected}*${after}`, selStart: selEnd + 2, selEnd: selEnd + 2 }
 }
 
+const API = '/api/journal'
+
 export default function Journal() {
   const [selectedDate, setSelectedDate] = useState(getTodayStr())
   const [mood, setMood] = useState(3)
@@ -76,65 +65,75 @@ export default function Journal() {
   const [showPrompts, setShowPrompts] = useState(false)
   const [moodHover, setMoodHover] = useState(null)
 
-  const entries = useJournalStore(s => s.entries)
-  const currentEntry = useJournalStore(s => s.currentEntry)
-  const fetchEntries = useJournalStore(s => s.fetchEntries)
-  const fetchEntry = useJournalStore(s => s.fetchEntry)
-  const saveEntry = useJournalStore(s => s.saveEntry)
-  const searchEntries = useJournalStore(s => s.searchEntries)
-  const searchResults = useJournalStore(s => s.searchResults)
-  const moodTrend = useJournalStore(s => s.moodTrend)
-  const fetchMoodTrend = useJournalStore(s => s.fetchMoodTrend)
-  const photos = useJournalStore(s => s.photos)
-  const fetchPhotos = useJournalStore(s => s.fetchPhotos)
-  const uploadPhoto = useJournalStore(s => s.uploadPhoto)
-  const deletePhoto = useJournalStore(s => s.deletePhoto)
-  const aiSummary = useJournalStore(s => s.aiSummary)
-  const aiSummaryLoading = useJournalStore(s => s.aiSummaryLoading)
-  const fetchAISummary = useJournalStore(s => s.fetchAISummary)
+  const { data: entries = [], isLoading: entriesLoading, isError: entriesError } = useJournalEntries()
+  const { data: currentEntry = null, isLoading: entryLoading, isError: entryError } = useJournalEntry(selectedDate)
+  const saveEntryMutation = useSaveEntry()
+  const deleteEntryMutation = useDeleteEntry()
+  const { data: searchResults = null, isLoading: searchLoading, isError: searchError } = useQuery({
+    queryKey: ['journalSearch', search],
+    queryFn: async () => {
+      if (!search) return null
+      const res = await fetch(`${API}?search=${encodeURIComponent(search)}`)
+      if (!res.ok) throw new Error('Failed to search')
+      const data = await res.json()
+      return extractArray(data)
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 1,
+    refetchOnWindowFocus: false,
+    enabled: !!search,
+  })
+  const { data: moodTrend = [], isLoading: moodTrendLoading, isError: moodTrendError } = useMoodTrend()
+  const { data: photos = [], isLoading: photosLoading, isError: photosError } = useJournalPhotos(selectedDate)
+  const uploadPhotoMutation = useUploadPhoto()
+  const deletePhotoMutation = useDeletePhoto()
+  const { data: aiSummary = null, isLoading: aiSummaryLoading, isError: aiSummaryError, refetch: refetchAiSummary } = useQuery({
+    queryKey: ['aiSummary', selectedDate],
+    queryFn: async () => {
+      if (!selectedDate) return null
+      const res = await fetch(`${API}/ai-summary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: selectedDate }),
+      })
+      const data = await res.json()
+      return data.summary
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 1,
+    refetchOnWindowFocus: false,
+    enabled: !!selectedDate,
+  })
 
   const editorRef = useRef(null)
   const fileRef = useRef(null)
 
-  useEffect(() => { fetchEntries().catch(() => {}); fetchMoodTrend().catch(() => {}) }, [])
-  useEffect(() => {
-    loadEntry(selectedDate).catch(() => {})
-    fetchPhotos(selectedDate).catch(() => {})
-    setSavedAt(null)
-    setActiveTab('write')
-    setSelectedPrompt(null)
-    setShowPrompts(false)
-  }, [selectedDate])
+   useEffect(() => {
+     // Entries and other data are fetched automatically by React Query
+   }, [selectedDate])
 
-  async function loadEntry(date) {
-    const entry = await fetchEntry(date).catch(() => null)
-    if (entry) {
-      setMood(entry.mood || 3); setWhatHappened(entry.what_happened || '')
-      setGratitude(entry.gratitude || ''); setMuhasaba(entry.muhasaba || '')
-      setIntention(entry.tomorrow_intention || '')
-      let tagStr = ''
-      if (entry.tags) { try { tagStr = JSON.parse(entry.tags).join(', ') } catch { tagStr = entry.tags } }
-      setTags(tagStr)
-      setSelectedPrompt(null)
-    } else {
-      setMood(3); setWhatHappened(''); setGratitude(''); setMuhasaba(''); setIntention(''); setTags('')
-      setSelectedPrompt(WRITE_PROMPTS[Math.floor(Math.random() * WRITE_PROMPTS.length)])
-    }
-  }
+   const autoSave = useCallback(() => {
+     saveEntryMutation.mutate({ 
+       date: selectedDate, 
+       mood, 
+       what_happened: whatHappened, 
+       gratitude, 
+       muhasaba, 
+       tomorrow_intention: intention, 
+       tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [] 
+     })
+   }, [selectedDate, mood, whatHappened, gratitude, muhasaba, intention, tags, saveEntryMutation])
 
-  const autoSave = useCallback(() => {
-    saveEntry({ date: selectedDate, mood, what_happened: whatHappened, gratitude, muhasaba, tomorrow_intention: intention, tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [] }).then(() => setSavedAt(new Date()))
-  }, [selectedDate, mood, whatHappened, gratitude, muhasaba, intention, tags, saveEntry])
+   useEffect(() => {
+     if (!whatHappened && !gratitude && !muhasaba && !intention) return
+     const t = setTimeout(autoSave, 15000)
+     return () => clearTimeout(t)
+   }, [autoSave, whatHappened, gratitude, muhasaba, intention])
 
-  useEffect(() => {
-    if (!whatHappened && !gratitude && !muhasaba && !intention) return
-    const t = setTimeout(autoSave, 15000)
-    return () => clearTimeout(t)
-  }, [autoSave, whatHappened, gratitude, muhasaba, intention])
-
-  function handleSearch(e) {
-    const v = e.target.value; setSearch(v); searchEntries(v).catch(() => {})
-  }
+   function handleSearch(e) {
+     const v = e.target.value; setSearch(v)
+     // Search is handled automatically by the useQuery hook for searchResults
+   }
 
   const sortedEntries = searchResults || entries
   const isToday = selectedDate === getTodayStr()
@@ -160,35 +159,53 @@ export default function Journal() {
     })
   }
 
-  function handlePhotoUpload(e) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      uploadPhoto(selectedDate, ev.target.result, '').catch(() => {})
-    }
-    reader.readAsDataURL(file)
-  }
+   function handlePhotoUpload(e) {
+     const file = e.target.files?.[0]
+     if (!file) return
+     const reader = new FileReader()
+     reader.onload = (ev) => {
+       uploadPhotoMutation.mutate({ 
+         entry_date: selectedDate, 
+         photo_data: ev.target.result, 
+         caption: '' 
+       })
+     }
+     reader.readAsDataURL(file)
+   }
 
-  function handleDrop(e) {
-    e.preventDefault()
-    setDragging(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        uploadPhoto(selectedDate, ev.target.result, '').catch(() => {})
-      }
-      reader.readAsDataURL(file)
-    }
-  }
+   function handleDrop(e) {
+     e.preventDefault()
+     setDragging(false)
+     const file = e.dataTransfer.files?.[0]
+     if (file && file.type.startsWith('image/')) {
+       const reader = new FileReader()
+       reader.onload = (ev) => {
+         uploadPhotoMutation.mutate({ 
+           entry_date: selectedDate, 
+           photo_data: ev.target.result, 
+           caption: '' 
+         })
+       }
+       reader.readAsDataURL(file)
+     }
+   }
 
-  function generateAISummary() {
-    if (!aiSummary) fetchAISummary(selectedDate)
-    setActiveTab('ai')
-  }
+   function generateAISummary() {
+     if (!aiSummary) refetchAiSummary()
+     setActiveTab('ai')
+   }
 
   const moodChartData = (moodTrend || []).filter(d => d.mood)
+
+  const topTags = useMemo(() => {
+    const tagCounts = {}
+    entries.forEach(e => {
+      if (e.tags) {
+        try { JSON.parse(e.tags).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1 }) } catch {}
+      }
+    })
+    return Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 8)
+  }, [entries])
 
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 300, damping: 28 }} className="p-8 max-w-7xl mx-auto">
@@ -214,7 +231,7 @@ export default function Journal() {
         </div>
       </motion.div>
 
-      <div className="grid grid-cols-[280px_1fr_200px] gap-6" style={{ minHeight: 'calc(100vh - 160px)' }}>
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_200px] gap-4 lg:gap-6" style={{ minHeight: 'calc(100vh - 160px)' }}>
         {/* Left: Entry Navigator */}
         <motion.div initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.05, ...itemSpring }} className="card overflow-y-auto" style={{ maxHeight: 'calc(100vh - 160px)' }}>
           <div className="flex items-center gap-2 mb-3">
@@ -223,7 +240,16 @@ export default function Journal() {
             <span className="text-micro" style={{ color: 'var(--text-tertiary)' }}>({sortedEntries.length})</span>
           </div>
           <div className="space-y-1">
-            {sortedEntries.slice(0, 40).map((entry, i) => {
+            {sortedEntries.length === 0 ? (
+              <div className="text-center py-8">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full mx-auto mb-2" style={{ background: 'var(--bg-surface)' }}>
+                  <FileText size={18} style={{ color: 'var(--text-tertiary)' }} />
+                </div>
+                <p className="text-small font-medium" style={{ color: 'var(--text-primary)' }}>No entries yet</p>
+                <p className="text-micro mt-1" style={{ color: 'var(--text-muted)' }}>Write your first journal entry today</p>
+              </div>
+            ) : (
+              sortedEntries.slice(0, 40).map((entry, i) => {
               const moodEmoji = moodEmojis[(entry.mood || 3) - 1] || '📝'
               const isSelected = selectedDate === entry.date
               return (
@@ -248,7 +274,7 @@ export default function Journal() {
                   <p className="text-micro mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{entry.what_happened?.slice(0, 50) || 'No content'}</p>
                 </motion.button>
               )
-            })}
+            }))}
           </div>
         </motion.div>
 
@@ -257,11 +283,11 @@ export default function Journal() {
           {/* Date Navigator + Mood */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <motion.button whileTap={{ scale: 0.9 }} whileHover={{ scale: 1.1 }} onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(d.toISOString().split('T')[0]) }} className="p-1 rounded" style={{ background: 'var(--bg-surface)' }}>
+<motion.button whileTap={{ scale: 0.9 }} whileHover={{ scale: 1.1 }} onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(d.toISOString().split('T')[0]) }} aria-label="Previous day" className="p-1 rounded" style={{ background: 'var(--bg-surface)' }}>
                 <ArrowLeft size={14} style={{ color: 'var(--text-muted)' }} />
               </motion.button>
               <span className="text-subheading font-semibold" style={{ color: 'var(--text-primary)' }}>{formatDateShort(selectedDate)}</span>
-              <motion.button whileTap={{ scale: 0.9 }} whileHover={{ scale: 1.1 }} onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(d.toISOString().split('T')[0]) }} className="p-1 rounded" style={{ background: 'var(--bg-surface)' }}>
+<motion.button whileTap={{ scale: 0.9 }} whileHover={{ scale: 1.1 }} onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(d.toISOString().split('T')[0]) }} aria-label="Next day" className="p-1 rounded" style={{ background: 'var(--bg-surface)' }}>
                 <ArrowRight size={14} style={{ color: 'var(--text-muted)' }} />
               </motion.button>
               {isToday && <span className="badge-blue text-micro">Today</span>}
@@ -328,8 +354,8 @@ export default function Journal() {
                     { icon: ListOrdered, action: () => handleFormat((t, s) => ({ text: t.slice(0, s) + '\n1. ' + t.slice(s), selStart: s + 3, selEnd: s + 3 })), title: 'Numbered list' },
                     { icon: CheckSquare, action: () => handleFormat((t, s) => ({ text: t.slice(0, s) + '\n[ ] ' + t.slice(s), selStart: s + 5, selEnd: s + 5 })), title: 'Task list' },
                   ].map((btn, i) => (
-                    <motion.button key={i} whileTap={{ scale: 0.85 }} whileHover={{ scale: 1.1 }}
-                      onClick={btn.action} title={btn.title}
+<motion.button key={i} whileTap={{ scale: 0.85 }} whileHover={{ scale: 1.1 }}
+                      onClick={btn.action} title={btn.title} aria-label={btn.title}
                       className="p-1.5 rounded-md transition-colors"
                       style={{ color: 'var(--text-muted)' }}
                     >
@@ -421,7 +447,7 @@ export default function Journal() {
                         <motion.div key={photo.id} layout initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}
                           className="relative group rounded-lg overflow-hidden" style={{ width: 80, height: 80 }}>
                           <img src={photo.photo_data} alt="" className="w-full h-full object-cover" />
-                          <motion.button whileTap={{ scale: 0.9 }} onClick={() => deletePhoto(photo.id)}
+<motion.button whileTap={{ scale: 0.9 }} onClick={() => deletePhotoMutation.mutate(photo.id)} aria-label="Delete photo"
                             className="absolute top-0.5 right-0.5 p-0.5 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
                             <X size={10} className="text-white" />
                           </motion.button>
@@ -445,8 +471,9 @@ export default function Journal() {
 
             {activeTab === 'preview' && (
               <motion.div key="preview" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.15 }}
-                className="prose min-h-[300px] text-body leading-relaxed" style={{ color: 'var(--text-primary)' }}
-                dangerouslySetInnerHTML={{ __html: applyMarkdown(whatHappened || '_Nothing written yet._') }} />
+                className="prose min-h-[300px] text-body leading-relaxed" style={{ color: 'var(--text-primary)' }}>
+                <Suspense fallback={<div className="h-4 w-full rounded animate-shimmer" style={{ background: 'var(--bg-surface)' }} />}><MarkdownMessage content={whatHappened || '_Nothing written yet._'} /></Suspense>
+              </motion.div>
             )}
 
             {activeTab === 'ai' && (
@@ -470,7 +497,7 @@ export default function Journal() {
                   <div className="text-center py-12" style={{ color: 'var(--text-muted)' }}>
                     <Sparkles size={32} className="mx-auto mb-2 opacity-40" />
                     <p className="text-body mb-3">Generate an AI summary of this entry</p>
-                    <motion.button whileTap={{ scale: 0.97 }} onClick={() => fetchAISummary(selectedDate)} className="btn-primary flex items-center gap-2 mx-auto text-small">
+                    <motion.button whileTap={{ scale: 0.97 }} onClick={() => refetchAiSummary()} className="btn-primary flex items-center gap-2 mx-auto text-small">
                       <Sparkles size={14} /> Generate Summary
                     </motion.button>
                   </div>
@@ -531,22 +558,14 @@ export default function Journal() {
           <div className="card">
             <span className="section-label block mb-2">Top Tags</span>
             <div className="flex flex-wrap gap-1">
-              {(() => {
-                const tagCounts = {}
-                entries.forEach(e => {
-                  if (e.tags) {
-                    try { JSON.parse(e.tags).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1 }) } catch {}
-                  }
-                })
-                return Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([tag, count]) => (
-                  <motion.span key={tag} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 200 }}
-                    className="px-2 py-0.5 rounded-full text-micro font-medium cursor-pointer transition-colors hover:scale-105"
-                    style={{ background: 'var(--bg-surface)', color: 'var(--accent)' }}
-                  >
-                    #{tag} <span className="opacity-50">({count})</span>
-                  </motion.span>
-                ))
-              })()}
+              {topTags.map(([tag, count]) => (
+                <motion.span key={tag} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 200 }}
+                  className="px-2 py-0.5 rounded-full text-micro font-medium cursor-pointer transition-colors hover:scale-105"
+                  style={{ background: 'var(--bg-surface)', color: 'var(--accent)' }}
+                >
+                  #{tag} <span className="opacity-50">({count})</span>
+                </motion.span>
+              ))}
             </div>
           </div>
 

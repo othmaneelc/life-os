@@ -1,34 +1,70 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { shallow } from 'zustand/shallow'
 import { motion } from 'framer-motion'
-import { Plus, Download, Trash2, Instagram, Youtube, Twitter, BarChart3 } from 'lucide-react'
-import toast from 'react-hot-toast'
+import { Plus, Download, Trash2, Instagram, Youtube, Twitter, BarChart3, TrendingUp, AlertTriangle, Clock, Columns, List } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { useAgencyStore } from '../store/agencyStore'
+import { useAgencyStore, useAgencyClients, useAgencyProspects, useAgencyRevenue, useAgencyOutreach, useAgencyContent, useAgencyGBP, useUpdateProspect, useDeleteProspect, useClientHealth } from '../store/agencyStore'
 import { useThemeStore } from '../store/themeStore'
+import { useConfirm } from '../hooks/useConfirm'
 import ClientCard from '../components/ClientCard'
+import PipelineKanban from '../components/PipelineKanban'
 import { prospectStatuses } from '../utils/formatters'
 import Modal from '../components/Modal'
+import DataError from '../components/DataError'
+import { CardSkeleton, SummaryCardSkeleton, ChartSkeleton } from '../components/Skeleton'
 
 export default function Agency() {
-  const isDark = useThemeStore(s => s.theme === 'dark' || s.theme === 'monk')
-  const clients = useAgencyStore(s => s.clients)
-  const prospects = useAgencyStore(s => s.prospects)
-  const revenues = useAgencyStore(s => s.revenues)
-  const outreach = useAgencyStore(s => s.outreach)
-  const content = useAgencyStore(s => s.content)
-  const gbp = useAgencyStore(s => s.gbp)
-  const fetchClients = useAgencyStore(s => s.fetchClients)
-  const fetchProspects = useAgencyStore(s => s.fetchProspects)
-  const fetchRevenue = useAgencyStore(s => s.fetchRevenue)
-  const fetchOutreach = useAgencyStore(s => s.fetchOutreach)
-  const fetchContent = useAgencyStore(s => s.fetchContent)
-  const fetchGBP = useAgencyStore(s => s.fetchGBP)
-  const addProspect = useAgencyStore(s => s.addProspect)
-  const deleteProspect = useAgencyStore(s => s.deleteProspect)
-  const logOutreach = useAgencyStore(s => s.logOutreach)
-  const addContent = useAgencyStore(s => s.addContent)
-  const deleteContent = useAgencyStore(s => s.deleteContent)
-  const addGBP = useAgencyStore(s => s.addGBP)
+  const isDark = useThemeStore(s => s.theme === 'dark' || s.theme === 'monk' || s.theme === 'night')
+  const {
+    clients,
+    prospects,
+    revenues,
+    outreach,
+    content,
+    gbp,
+    addProspect,
+    deleteProspect,
+    logOutreach,
+    addContent,
+    deleteContent,
+    addGBP
+   } = useAgencyStore(
+    s => ({
+      clients: s.clients,
+      prospects: s.prospects,
+      revenues: s.revenues,
+      outreach: s.outreach,
+      content: s.content,
+      gbp: s.gbp,
+      addProspect: s.addProspect,
+      deleteProspect: s.deleteProspect,
+      logOutreach: s.logOutreach,
+      addContent: s.addContent,
+      deleteContent: s.deleteContent,
+      addGBP: s.addGBP
+    }),
+    shallow
+  )
+
+  // Populate store data via React Query hooks
+  const { isLoading: clientsLoading, isError: clientsError, refetch: refetchClients } = useAgencyClients()
+  const { isLoading: prospectsLoading, isError: prospectsError, refetch: refetchProspects } = useAgencyProspects()
+  const { isLoading: revenueLoading, isError: revenueError, refetch: refetchRevenue } = useAgencyRevenue()
+  const { isLoading: outreachLoading, isError: outreachError, refetch: refetchOutreach } = useAgencyOutreach()
+  const { isLoading: contentLoading, isError: contentError, refetch: refetchContent } = useAgencyContent()
+  const { isLoading: gbpLoading, isError: gbpError, refetch: refetchGBP } = useAgencyGBP()
+  const { data: healthScores = [] } = useClientHealth()
+
+  const isLoading = clientsLoading || prospectsLoading || revenueLoading || outreachLoading || contentLoading || gbpLoading
+  const isError = clientsError || prospectsError || revenueError || outreachError || contentError || gbpError
+  const refetchAll = () => {
+    refetchClients()
+    refetchProspects()
+    refetchRevenue()
+    refetchOutreach()
+    refetchContent()
+    refetchGBP()
+  }
 
   const [showProspectModal, setShowProspectModal] = useState(false)
   const [newProspect, setNewProspect] = useState({ company_name: '', contact_name: '', phone: '', state: '', status: 'new_lead', notes: '', next_action: '' })
@@ -37,18 +73,35 @@ export default function Agency() {
   const [newContent, setNewContent] = useState({ date: new Date().toISOString().split('T')[0], platform: 'instagram', content_type: 'post', client: '', caption: '', likes: 0, comments: 0, shares: 0, views: 0, link: '' })
   const [showGBPModal, setShowGBPModal] = useState(false)
   const [newGBP, setNewGBP] = useState({ week_start: '', profile_views: 0, direction_requests: 0, phone_calls: 0, new_reviews: 0, avg_rating: 5.0, posts_published: 0 })
+  const [pipelineView, setPipelineView] = useState('kanban')
 
-  const fetchAll = useAgencyStore(s => s.fetchAll)
-
-  useEffect(() => {
-    fetchAll().catch(() => toast.error('Failed to load agency data'))
-  }, [])
+  const deleteMutation = useDeleteProspect()
+  const updateProspectMutation = useUpdateProspect()
 
   const totalRevenue = Array.isArray(revenues) ? revenues.reduce((s, r) => s + (r.revenue_mad || 0), 0) : 0
   const totalExpenses = Array.isArray(revenues) ? revenues.reduce((s, r) => s + (r.expenses_mad || 0), 0) : 0
   const totalProfit = totalRevenue - totalExpenses
   const revenueGoal = 10000
   const goalProgress = totalRevenue > 0 ? Math.min((totalRevenue / revenueGoal) * 100, 100) : 0
+
+  const cdzClient = Array.isArray(clients) ? clients.find(c => c.name?.includes('CDZ')) : null
+  const contractDaysLeft = cdzClient ? Math.max(0, Math.floor((new Date(cdzClient.contract_end) - Date.now()) / 86400000)) : 0
+  const contractUrgent = contractDaysLeft > 0 && contractDaysLeft <= 7
+
+  const { confirm, ConfirmModal } = useConfirm()
+
+  async function handleDeleteProspect(id) {
+    if (await confirm('Delete this prospect? This cannot be undone.', { title: 'Delete Prospect' })) {
+      deleteProspect(id)
+    }
+  }
+
+  function handleStatusChange(id, newStatus) {
+    updateProspectMutation.mutate({ id, updates: { status: newStatus } })
+    useAgencyStore.setState(state => ({
+      prospects: state.prospects.map(p => p.id === id ? { ...p, status: newStatus } : p)
+    }))
+  }
 
   function handleAddProspect(e) {
     e.preventDefault()
@@ -69,7 +122,7 @@ export default function Agency() {
   })) : []
 
   const axisColor = isDark ? '#636366' : '#6E6E73'
-  const revenueColor = isDark ? '#0A84FF' : '#0071E3'
+  const revenueColor = isDark ? '#818CF8' : '#5B5BD6'
   const gbpColor = isDark ? '#30D158' : '#34C759'
   const tooltipBg = isDark ? '#2C2C2E' : '#FFFFFF'
 
@@ -90,22 +143,107 @@ export default function Agency() {
 
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 300, damping: 28 }} className="p-8 max-w-6xl mx-auto space-y-6">
+      {isLoading && (
+        <div className="space-y-6">
+          <SummaryCardSkeleton />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <CardSkeleton rows={4} />
+            <CardSkeleton rows={4} />
+          </div>
+        </div>
+      )}
+      {isError && <DataError message="Failed to load agency data" onRetry={refetchAll} />}
       {/* Agency Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 stack-on-mobile">
         <img src="/images/agency/logo.png" alt="MIX AGENCI" className="h-8 object-contain"
           onError={e => { e.target.style.display='none'; document.getElementById('agency-title').style.display='block' }} />
         <h1 id="agency-title" className="text-heading font-semibold hidden">MIX AGENCI</h1>
         <div>
-          <p className="text-body text-apple-muted">Othmane Elcaidi — Founder</p>
+          <p className="text-body text-apple-muted">Founder</p>
           <p className="text-small text-apple-muted">Focus: HVAC Social Media Marketing</p>
         </div>
+      </div>
+
+      {/* War Board Metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp size={14} className="text-apple-blue" />
+            <span className="text-micro text-apple-muted font-medium uppercase tracking-wider">Revenue</span>
+          </div>
+          <div className="text-heading font-bold">{totalRevenue.toLocaleString()} MAD</div>
+          <div className="mt-1">
+            <div className="flex justify-between text-micro text-apple-muted mb-0.5">
+              <span>Goal: {revenueGoal.toLocaleString()} MAD</span>
+              <span>{goalProgress.toFixed(0)}%</span>
+            </div>
+            <div className="h-2 bg-apple-surface rounded-full overflow-hidden">
+              <motion.div initial={{ width: 0 }} animate={{ width: `${goalProgress}%` }} className="h-full bg-apple-blue rounded-full" />
+            </div>
+          </div>
+          <div className="text-micro text-apple-tertiary mt-1">
+            {totalRevenue >= revenueGoal ? 'Goal reached!' : `${(revenueGoal - totalRevenue).toLocaleString()} MAD to $10K`}
+          </div>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0, transition: { delay: 0.05 } }} className={`card ${contractUrgent ? 'ring-2 ring-apple-red/50' : ''}`}>
+          <div className="flex items-center gap-2 mb-1">
+            <Clock size={14} className={contractUrgent ? 'text-apple-red' : 'text-apple-green'} />
+            <span className="text-micro text-apple-muted font-medium uppercase tracking-wider">Contract</span>
+          </div>
+          {cdzClient ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span className={`text-heading font-bold ${contractUrgent ? 'text-apple-red' : ''}`}>{contractDaysLeft}</span>
+                <span className="text-body text-apple-muted">days left</span>
+                {contractUrgent && <AlertTriangle size={16} className="text-apple-red animate-pulse" />}
+              </div>
+              <div className="text-small text-apple-muted truncate mt-0.5">{cdzClient.name}</div>
+              <div className="text-micro text-apple-tertiary">Ends {cdzClient.contract_end}</div>
+            </>
+          ) : (
+            <div className="text-body text-apple-muted">No active contract</div>
+          )}
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0, transition: { delay: 0.1 } }} className="card">
+          <div className="flex items-center gap-2 mb-1">
+            <BarChart3 size={14} className="text-apple-amber" />
+            <span className="text-micro text-apple-muted font-medium uppercase tracking-wider">Pipeline</span>
+          </div>
+          <div className="text-heading font-bold">{prospects.length}</div>
+          <div className="text-body text-apple-muted">active prospects</div>
+          <div className="text-micro text-apple-tertiary mt-0.5">
+            {prospects.filter(p => p.status !== 'closed_won' && p.status !== 'closed_lost').length} in play
+            · {prospects.filter(p => p.status === 'meeting_booked' || p.status === 'proposal_sent').length} hot
+          </div>
+        </motion.div>
       </div>
 
       {/* Active Client */}
       <div>
         <div className="section-label mb-3">Active Client</div>
         {clients.length > 0 ? (
-          <ClientCard client={clients[0]} />
+          <div className="space-y-3">
+            {clients.map(c => {
+              const h = healthScores.find(s => s.id === c.id)
+              const healthColor = !h ? '' : h.label === 'Good' ? 'bg-apple-green' : h.label === 'Okay' ? 'bg-apple-amber' : 'bg-apple-red'
+              return (
+                <div key={c.id} className="flex items-center gap-3 stack-on-mobile">
+                  <div className="flex-1"><ClientCard client={c} /></div>
+                  {h && (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className={`w-2.5 h-2.5 rounded-full ${healthColor}`} />
+                      <span className="text-small font-medium">{h.health_score}</span>
+                      <span className={`text-micro ${h.label === 'Good' ? 'text-apple-green' : h.label === 'Okay' ? 'text-apple-amber' : 'text-apple-red'}`}>
+                        {h.label}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         ) : (
           <p className="text-body text-apple-muted">No active clients</p>
         )}
@@ -115,49 +253,61 @@ export default function Agency() {
       <div>
         <div className="flex items-center justify-between mb-3">
           <div className="section-label">HVAC Pipeline</div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 stack-on-mobile">
+            <button onClick={() => setPipelineView(p => p === 'kanban' ? 'table' : 'kanban')}
+              className="btn-ghost flex items-center gap-1 text-small">
+              {pipelineView === 'kanban' ? <List size={14} /> : <Columns size={14} />}
+              {pipelineView === 'kanban' ? 'Table' : 'Kanban'}
+            </button>
             <button onClick={exportCSV} className="btn-ghost flex items-center gap-1 text-small"><Download size={14} /> CSV</button>
             <button onClick={() => setShowProspectModal(true)} className="btn-primary flex items-center gap-1 text-small"><Plus size={14} /> Add Prospect</button>
           </div>
         </div>
-        <div className="card overflow-x-auto">
-          <table className="w-full text-small">
-            <thead>
-              <tr className="border-b border-apple-border">
-                <th className="text-left p-2 text-apple-muted font-medium">Company</th>
-                <th className="text-left p-2 text-apple-muted font-medium">Contact</th>
-                <th className="text-left p-2 text-apple-muted font-medium">Phone</th>
-                <th className="text-left p-2 text-apple-muted font-medium">State</th>
-                <th className="text-left p-2 text-apple-muted font-medium">Status</th>
-                <th className="text-left p-2 text-apple-muted font-medium">Next Action</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {prospects.length === 0 && (
-                <tr><td colSpan="7" className="text-center py-8 text-apple-muted">No prospects yet. Add your first one.</td></tr>
-              )}
-              {prospects.map(p => {
-                const statusConfig = prospectStatuses.find(s => s.value === p.status) || prospectStatuses[0]
-                return (
-                  <tr key={p.id} className="border-b border-apple-border/50 hover:bg-apple-surface transition-colors">
-                    <td className="p-2 font-medium">{p.company_name || '—'}</td>
-                    <td className="p-2 text-apple-muted">{p.contact_name || '—'}</td>
-                    <td className="p-2 text-apple-muted">{p.phone || '—'}</td>
-                    <td className="p-2 text-apple-muted">{p.state || '—'}</td>
-                    <td className="p-2"><span className={statusConfig.color}>{statusConfig.label}</span></td>
-                    <td className="p-2 text-apple-muted">{p.next_action || '—'}</td>
-                    <td className="p-2">
-                      <button onClick={() => deleteProspect(p.id)} className="text-apple-tertiary hover:text-apple-red transition-colors">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+
+        {pipelineView === 'kanban' ? (
+          <div className="card p-3 overflow-x-auto">
+            <PipelineKanban prospects={prospects} onDelete={handleDeleteProspect} onStatusChange={handleStatusChange} isDark={isDark} />
+          </div>
+        ) : (
+          <div className="card overflow-x-auto">
+            <table className="w-full text-small">
+              <thead>
+                <tr className="border-b border-apple-border">
+                  <th className="text-left p-2 text-apple-muted font-medium">Company</th>
+                  <th className="text-left p-2 text-apple-muted font-medium">Contact</th>
+                  <th className="text-left p-2 text-apple-muted font-medium">Phone</th>
+                  <th className="text-left p-2 text-apple-muted font-medium">State</th>
+                  <th className="text-left p-2 text-apple-muted font-medium">Status</th>
+                  <th className="text-left p-2 text-apple-muted font-medium">Next Action</th>
+                  <th className="p-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {prospects.length === 0 && (
+                  <tr><td colSpan="7" className="text-center py-8 text-apple-muted">No prospects yet. Add your first one.</td></tr>
+                )}
+                {prospects.map(p => {
+                  const statusConfig = prospectStatuses.find(s => s.value === p.status) || prospectStatuses[0]
+                  return (
+                    <tr key={p.id} className="border-b border-apple-border/50 hover:bg-apple-surface transition-colors">
+                      <td className="p-2 font-medium">{p.company_name || '—'}</td>
+                      <td className="p-2 text-apple-muted">{p.contact_name || '—'}</td>
+                      <td className="p-2 text-apple-muted">{p.phone || '—'}</td>
+                      <td className="p-2 text-apple-muted">{p.state || '—'}</td>
+                      <td className="p-2"><span className={statusConfig.color}>{statusConfig.label}</span></td>
+                      <td className="p-2 text-apple-muted">{p.next_action || '—'}</td>
+                      <td className="p-2">
+                        <button onClick={() => handleDeleteProspect(p.id)} aria-label="Delete prospect" className="text-apple-tertiary hover:text-apple-red transition-colors">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Revenue Tracker */}
@@ -226,7 +376,7 @@ export default function Agency() {
       <div>
         <div className="section-label mb-3">Outreach Log</div>
         <div className="card">
-          <form onSubmit={(e) => { e.preventDefault(); handleOutreachSubmit(new Date().toISOString().split('T')[0]) }} className="grid grid-cols-5 gap-3 mb-4">
+          <form onSubmit={(e) => { e.preventDefault(); handleOutreachSubmit(new Date().toISOString().split('T')[0]) }} className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
             <div>
               <label className="text-micro text-apple-muted block mb-1">Calls</label>
               <input type="number" value={outreachForm.calls_made} onChange={e => setOutreachForm(p => ({ ...p, calls_made: parseInt(e.target.value) || 0 }))} className="input-field text-small" min="0" />
@@ -339,7 +489,7 @@ export default function Agency() {
                   <td className="p-2 text-right">{c.likes || 0}</td>
                   <td className="p-2 text-right">{c.comments || 0}</td>
                   <td className="p-2">
-                    <button onClick={() => deleteContent(c.id)} className="text-apple-tertiary hover:text-apple-red transition-colors">
+                    <button onClick={() => deleteContent(c.id)} aria-label="Delete content" className="text-apple-tertiary hover:text-apple-red transition-colors">
                       <Trash2 size={12} />
                     </button>
                   </td>
@@ -417,7 +567,7 @@ export default function Agency() {
       {/* Offer Reference */}
       <div className="card border-l-[3px] border-l-apple-amber">
         <div className="section-label mb-2">HVAC Time-Machine Offer</div>
-        <div className="grid grid-cols-2 gap-4 text-small">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-small">
           <div><span className="text-apple-muted">Price:</span> <span className="font-medium">$1,500 upfront + $50/appointment</span></div>
           <div><span className="text-apple-muted">Guarantee:</span> <span className="font-medium">30 appointments in 90 days</span></div>
           <div><span className="text-apple-muted">Services:</span> <span className="font-medium">DB Reactivation + Reputation + FB Ads + Scripts</span></div>
@@ -568,6 +718,7 @@ export default function Agency() {
           </div>
         </form>
       </Modal>
+      <ConfirmModal />
     </motion.div>
   )
 }

@@ -1,9 +1,27 @@
-import { create } from 'zustand'
+import { createWithEqualityFn } from 'zustand/traditional'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 
 const API = '/api/pomodoro'
 
-export const usePomodoroStore = create((set, get) => ({
+export function usePomodoroStats(start, end) {
+  return useQuery({ queryKey: ['pomodoroStats', start, end], queryFn: async () => { const r = await fetch(`${API}/stats?start=${start}&end=${end}`); if (!r.ok) throw new Error(); return r.json() }, enabled: !!start && !!end, staleTime: 60000 })
+}
+
+export function useAddPomodoroSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (session) => {
+      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(session) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pomodoroStats'] }); toast.success('Pomodoro saved') },
+    onError: () => toast.error('Failed to save session'),
+  })
+}
+
+export const usePomodoroStore = createWithEqualityFn((set, get) => ({
   sessions: [],
   todaySessions: [],
   stats: null,
@@ -42,4 +60,4 @@ export const usePomodoroStore = create((set, get) => ({
       set({ stats: await res.json() })
     } catch { toast.error('Failed to load stats') }
   },
-}))
+}), Object.is)

@@ -1,9 +1,69 @@
-import { create } from 'zustand'
+import { createWithEqualityFn } from 'zustand/traditional'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 
 const API = '/api/agency'
 
-export const useAgencyStore = create((set, get) => ({
+export function useAgencyClients() {
+  return useQuery({ queryKey: ['agencyClients'], queryFn: async () => { const r = await fetch(`${API}/clients`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 30000 })
+}
+
+export function useAgencyProspects() {
+  return useQuery({ queryKey: ['agencyProspects'], queryFn: async () => { const r = await fetch(`${API}/prospects`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 30000 })
+}
+
+export function useAgencyRevenue() {
+  return useQuery({ queryKey: ['agencyRevenue'], queryFn: async () => { const r = await fetch(`${API}/revenue`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 30000 })
+}
+
+export function useAgencyOutreach() {
+  return useQuery({ queryKey: ['agencyOutreach'], queryFn: async () => { const r = await fetch(`${API}/outreach`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 30000 })
+}
+
+export function useAgencyContent(client) {
+  return useQuery({
+    queryKey: ['agencyContent', client],
+    queryFn: async () => {
+      const params = client ? `?client=${encodeURIComponent(client)}` : ''
+      const r = await fetch(`${API}/content${params}`)
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    staleTime: 30000,
+  })
+}
+
+export function useAgencyGBP() {
+  return useQuery({ queryKey: ['agencyGBP'], queryFn: async () => { const r = await fetch(`${API}/gbp`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 30000 })
+}
+
+export function useUpdateProspect() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, updates }) => {
+      const r = await fetch(`${API}/prospects/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agencyProspects'] }); toast.success('Prospect updated') },
+    onError: () => toast.error('Failed to update prospect'),
+  })
+}
+
+export function useDeleteProspect() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id) => { const r = await fetch(`${API}/prospects/${id}`, { method: 'DELETE' }); if (!r.ok) throw new Error() },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agencyProspects'] }); toast.success('Prospect deleted') },
+    onError: () => toast.error('Failed to delete prospect'),
+  })
+}
+
+export function useClientHealth() {
+  return useQuery({ queryKey: ['clientHealth'], queryFn: async () => { const r = await fetch(`${API}/clients/health`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 60000 })
+}
+
+export const useAgencyStore = createWithEqualityFn((set, get) => ({
   clients: [],
   prospects: [],
   revenues: [],
@@ -219,4 +279,4 @@ export const useAgencyStore = create((set, get) => ({
       toast.error('Failed to log GBP data')
     }
   },
-}))
+}), Object.is)

@@ -1,9 +1,72 @@
-import { create } from 'zustand'
+import { createWithEqualityFn } from 'zustand/traditional'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 
 const API = '/api/journal'
 
-export const useJournalStore = create((set, get) => ({
+export function useJournalEntries() {
+  return useQuery({ queryKey: ['journalEntries'], queryFn: async () => { const r = await fetch(API); if (!r.ok) throw new Error(); return r.json() }, staleTime: 30000 })
+}
+
+export function useJournalEntry(date) {
+  return useQuery({ queryKey: ['journalEntry', date], queryFn: async () => { const r = await fetch(`${API}/${date}`); if (!r.ok) throw new Error(); return r.json() }, enabled: !!date })
+}
+
+export function useSaveEntry() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (entry) => {
+      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entry) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['journalEntries'] }); qc.invalidateQueries({ queryKey: ['journalEntry'] }); toast.success('Entry saved') },
+    onError: () => toast.error('Failed to save entry'),
+  })
+}
+
+export function useDeleteEntry() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id) => {
+      const r = await fetch(`${API}/${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error()
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['journalEntries'] }); toast.success('Entry deleted') },
+    onError: () => toast.error('Failed to delete entry'),
+  })
+}
+
+export function useUploadPhoto() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ entry_date, photo_data, caption }) => {
+      const r = await fetch(`${API}/upload`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entry_date, photo_data, caption }) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['journalPhotos'] }),
+    onError: () => toast.error('Failed to upload photo'),
+  })
+}
+
+export function useDeletePhoto() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id) => { await fetch(`${API}/photos/${id}`, { method: 'DELETE' }) },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['journalPhotos'] }),
+  })
+}
+
+export function useMoodTrend() {
+  return useQuery({ queryKey: ['moodTrend'], queryFn: async () => { const r = await fetch(`${API}/mood-trend`); if (!r.ok) throw new Error(); return r.json() }, staleTime: 60000 })
+}
+
+export function useJournalPhotos(date) {
+  return useQuery({ queryKey: ['journalPhotos', date], queryFn: async () => { const r = await fetch(`${API}/photos/${date}`); if (!r.ok) throw new Error(); return r.json() }, enabled: !!date })
+}
+
+export const useJournalStore = createWithEqualityFn((set, get) => ({
   entries: [],
   currentEntry: null,
   loading: false,
@@ -75,17 +138,19 @@ export const useJournalStore = create((set, get) => ({
   fetchMoodTrend: async () => {
     try {
       const res = await fetch(`${API}/mood-trend`)
+      if (!res.ok) throw new Error()
       const data = await res.json()
       set({ moodTrend: data })
-    } catch {}
+    } catch { console.error('fetchMoodTrend failed') }
   },
 
   fetchPhotos: async (date) => {
     try {
       const res = await fetch(`${API}/photos/${date}`)
+      if (!res.ok) throw new Error()
       const data = await res.json()
       set({ photos: data })
-    } catch {}
+    } catch { console.error('fetchPhotos failed') }
   },
 
   uploadPhoto: async (entry_date, photo_data, caption) => {
@@ -117,9 +182,10 @@ export const useJournalStore = create((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date }),
       })
+      if (!res.ok) throw new Error()
       const data = await res.json()
       set({ aiSummary: data.summary, aiSummaryLoading: false })
-    } catch { set({ aiSummaryLoading: false }) }
+    } catch { console.error('fetchAISummary failed'); set({ aiSummaryLoading: false }) }
   },
-}))
+}), Object.is)
 

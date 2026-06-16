@@ -1,9 +1,55 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense, lazy, useCallback, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Plus, FileText, Trash2, BookOpen, Bot, X, Edit3, Save } from 'lucide-react'
+import EmptyState from '../components/EmptyState'
+import DataError from '../components/DataError'
+import { staggerContainer, staggerItem } from '../utils/animations'
+import PageHeader from '../components/PageHeader'
 import Modal from '../components/Modal'
-import { useKnowledgeStore } from '../store/knowledgeStore'
+import { useKnowledgeStore, useKnowledgeDocuments, useKnowledgeSearch, useAddDocument, useUpdateDocument, useDeleteDocument, useAskAI } from '../store/knowledgeStore'
+const MarkdownMessage = lazy(() => import('../components/MarkdownMessage'))
 import toast from 'react-hot-toast'
+import { useConfirm } from '../hooks/useConfirm'
+
+function highlightText(text, query) {
+  if (!query || !text) return text
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+  const parts = text.split(regex)
+  return parts.map((part, i) =>
+    regex.test(part) ? <mark key={i} className="bg-yellow-300/30 text-inherit rounded-sm px-0.5">{part}</mark> : part
+  )
+}
+
+const DocumentCard = memo(function DocumentCard({ doc, isSelected, onOpen, onDelete, highlightText, searchQuery }) {
+  return (
+    <motion.div variants={staggerItem}
+      layout
+      className={`card p-3 hover:shadow-apple-hover transition-shadow cursor-pointer group ${isSelected ? 'ring-1 ring-apple-blue' : ''}`}
+      onClick={() => onOpen(doc.id)}>
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <FileText size={14} className="text-apple-blue shrink-0" />
+          <div className="min-w-0">
+            <div className="text-small font-semibold truncate">{searchQuery.trim() ? highlightText(doc.title, searchQuery) : doc.title}</div>
+            {doc.source && <div className="text-micro text-apple-muted truncate">{doc.source}</div>}
+          </div>
+        </div>
+        <motion.button whileTap={{ scale: 0.9 }}
+          onClick={e => onDelete(e, doc.id)}
+          className="p-1 opacity-0 group-hover:opacity-100 hover:bg-apple-red/10 rounded-md transition-all shrink-0">
+          <Trash2 size={14} className="text-red-400" />
+        </motion.button>
+      </div>
+      {doc.tags && (
+        <div className="flex gap-1 mt-1.5 ml-6">
+          {(Array.isArray(doc.tags) ? doc.tags : (typeof doc.tags === 'string' ? doc.tags.split(',') : [])).map(t => (typeof t === 'string' ? t.trim() : t)).filter(Boolean).map(tag => (
+            <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded-full bg-apple-surface text-apple-muted">{tag}</span>
+          ))}
+        </div>
+      )}
+    </motion.div>
+  )
+})
 
 export default function KnowledgeBase() {
   const [searchQuery, setSearchQuery] = useState('')
@@ -18,10 +64,17 @@ export default function KnowledgeBase() {
   const [editTitle, setEditTitle] = useState('')
   const [editContent, setEditContent] = useState('')
   const editRef = useRef(null)
+  const { confirm, ConfirmModal } = useConfirm()
 
-  const { documents, searchResults, aiAnswer, fetchAll, search, add, update, remove, askAI } = useKnowledgeStore()
+  const aiAnswer = useKnowledgeStore(s => s.aiAnswer)
+  const clearAiAnswer = () => useKnowledgeStore.setState({ aiAnswer: null })
 
-  useEffect(() => { fetchAll().catch(() => {}) }, [])
+  const { data: documents = [], isLoading: docsLoading, isError: docsError, refetch: refetchDocs } = useKnowledgeDocuments()
+  const { data: searchResults = null, isLoading: searchLoading, isError: searchError, refetch: refetchSearch } = useKnowledgeSearch(searchQuery)
+  const addDoc = useAddDocument()
+  const updateDoc = useUpdateDocument()
+  const deleteDoc = useDeleteDocument()
+  const askAI = useAskAI()
 
   useEffect(() => {
     if (editingDoc && editRef.current) editRef.current.focus()
@@ -29,29 +82,32 @@ export default function KnowledgeBase() {
 
   const display = searchQuery.trim() ? searchResults : documents
 
-  async function handleSearch(val) {
+  function handleSearch(val) {
     setSearchQuery(val)
-    search(val || '').catch(() => {})
   }
 
-  async function handleAdd() {
+  function handleAdd() {
     if (!newTitle || !newContent) { toast.error('Title and content required'); return }
-    try {
-      await add({ title: newTitle, content: newContent, source: newSource, tags: newTags.split(',').map(t => t.trim()).filter(Boolean) })
-      setShowAdd(false)
-      setNewTitle(''); setNewContent(''); setNewSource(''); setNewTags('')
-    } catch { toast.error('Failed to add document') }
+    addDoc.mutate({ title: newTitle, content: newContent, source: newSource, tags: newTags.split(',').map(t => t.trim()).filter(Boolean) })
+    setShowAdd(false)
+    setNewTitle(''); setNewContent(''); setNewSource(''); setNewTags('')
   }
 
-  async function handleAI() {
+  function handleAI() {
     if (!aiQuestion.trim()) return
-    try { await askAI(aiQuestion.trim()) } catch { toast.error('AI search failed') }
+    askAI.mutate(aiQuestion.trim())
   }
 
-  function openViewer(doc) {
-    setViewDoc(doc)
-    setEditingDoc(null)
-  }
+  const handleOpenDoc = useCallback((docId) => {
+    const doc = display?.find(d => d.id === docId)
+    if (doc) { setViewDoc(doc); setEditingDoc(null) }
+  }, [display])
+
+  const handleDeleteClick = useCallback(async (e, id) => {
+    e.stopPropagation()
+    const ok = await confirm('Delete this document?')
+    if (ok) deleteDoc.mutate(id)
+  }, [confirm, deleteDoc])
 
   function startEdit(doc) {
     setEditingDoc(doc.id)
@@ -59,13 +115,11 @@ export default function KnowledgeBase() {
     setEditContent(doc.content)
   }
 
-  async function saveEdit(doc) {
+  function saveEdit(doc) {
     if (!editTitle.trim() || !editContent.trim()) return
-    try {
-      await update(doc.id, { title: editTitle.trim(), content: editContent.trim() })
-      setEditingDoc(null)
-      setViewDoc(prev => prev?.id === doc.id ? { ...prev, title: editTitle.trim(), content: editContent.trim() } : prev)
-    } catch { toast.error('Failed to save') }
+    updateDoc.mutate({ id: doc.id, updates: { title: editTitle.trim(), content: editContent.trim() } })
+    setEditingDoc(null)
+    setViewDoc(prev => prev?.id === doc.id ? { ...prev, title: editTitle.trim(), content: editContent.trim() } : prev)
   }
 
   function closeViewer() {
@@ -73,17 +127,9 @@ export default function KnowledgeBase() {
     setEditingDoc(null)
   }
 
-  function renderContent(text) {
-    if (!text) return ''
-    return text.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre class="bg-apple-surface p-3 rounded-md text-small overflow-x-auto my-2"><code>$2</code></pre>')
-      .replace(/\n- /g, '\n• ')
-      .replace(/\n/g, '<br>')
-  }
-
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 300, damping: 28 }} className="max-w-5xl mx-auto p-8 space-y-6">
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
-        <h1 className="text-heading font-semibold">Knowledge Base</h1>
+      <PageHeader title="Knowledge Base" actions={
         <div className="flex items-center gap-2">
           <span className="text-micro text-apple-muted">{documents.length} document{documents.length !== 1 ? 's' : ''}</span>
           <motion.button whileTap={{ scale: 0.95 }} onClick={() => setShowAdd(true)}
@@ -91,7 +137,7 @@ export default function KnowledgeBase() {
             <Plus size={14} /> Add
           </motion.button>
         </div>
-      </motion.div>
+      } />
 
       {/* Search */}
       <div className="relative">
@@ -99,7 +145,7 @@ export default function KnowledgeBase() {
         <input type="text" value={searchQuery} onChange={e => handleSearch(e.target.value)}
           placeholder="Search your knowledge base..." className="input-field pl-9 w-full" />
         {searchQuery && (
-          <button onClick={() => handleSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-apple-muted hover:text-apple-text">
+          <button onClick={() => handleSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-apple-muted hover:text-apple-text" aria-label="Clear search">
             <X size={14} />
           </button>
         )}
@@ -127,9 +173,9 @@ export default function KnowledgeBase() {
                 <Bot size={16} className="text-apple-blue" />
                 <span className="text-small font-semibold text-apple-text">AI Answer</span>
               </div>
-              <button onClick={() => useKnowledgeStore.setState({ aiAnswer: null })} className="p-1 hover:bg-apple-surface rounded"><X size={14} className="text-apple-muted" /></button>
+              <button onClick={clearAiAnswer} className="p-1 hover:bg-apple-surface rounded" aria-label="Clear AI answer"><X size={14} className="text-apple-muted" /></button>
             </div>
-            <p className="text-body text-apple-text whitespace-pre-line">{aiAnswer.answer}</p>
+            <p className="text-body text-apple-text whitespace-pre-line">{typeof aiAnswer === 'string' ? aiAnswer : aiAnswer.answer}</p>
             {aiAnswer.sources?.length > 0 && (
               <div className="mt-2 pt-2 border-t border-apple-border">
                 <div className="text-micro text-apple-muted">Sources: {aiAnswer.sources.join(', ')}</div>
@@ -139,47 +185,25 @@ export default function KnowledgeBase() {
         )}
       </AnimatePresence>
 
+      {(docsLoading || searchLoading) && (
+        <div className="space-y-3">
+          {[1,2,3].map(i => <div key={i} className="h-16 bg-apple-card animate-pulse rounded-xl" />)}
+        </div>
+      )}
+      {(docsError || searchError) && <DataError message="Failed to load documents" onRetry={() => { refetchDocs(); if (searchQuery) refetchSearch() }} />}
       {/* Results + Document Viewer */}
-      <div className="grid grid-cols-[1fr_360px] gap-4">
-        <div className="space-y-2">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4">
+        <motion.div {...staggerContainer} className="space-y-2">
           {display?.length === 0 && searchQuery && (
             <div className="text-body text-apple-muted text-center py-8">No documents match your search</div>
           )}
           {display?.length === 0 && !searchQuery && (
-            <div className="text-body text-apple-muted text-center py-8">
-              <BookOpen size={32} className="mx-auto mb-2 opacity-40" />
-              Your knowledge base is empty. Add your first document.
-            </div>
+            <EmptyState icon="knowledge" title="Your knowledge base is empty" description="Add your first document to start building your knowledge" actionLabel="Add Document" onAction={() => setShowAdd(true)} />
           )}
-          {display?.map((doc, i) => (
-            <motion.div key={doc.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0, transition: { delay: i * 0.03 } }}
-              layout
-              className={`card p-3 hover:shadow-apple-hover transition-shadow cursor-pointer group ${viewDoc?.id === doc.id ? 'ring-1 ring-apple-blue' : ''}`}
-              onClick={() => openViewer(doc)}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <FileText size={14} className="text-apple-blue shrink-0" />
-                  <div className="min-w-0">
-                    <div className="text-small font-semibold truncate">{doc.title}</div>
-                    {doc.source && <div className="text-micro text-apple-muted truncate">{doc.source}</div>}
-                  </div>
-                </div>
-                <motion.button whileTap={{ scale: 0.9 }}
-                  onClick={e => { e.stopPropagation(); if (confirm('Delete?')) remove(doc.id) }}
-                  className="p-1 opacity-0 group-hover:opacity-100 hover:bg-apple-red/10 rounded-md transition-all shrink-0">
-                  <Trash2 size={14} className="text-red-400" />
-                </motion.button>
-              </div>
-              {doc.tags && (
-                <div className="flex gap-1 mt-1.5 ml-6">
-                  {(Array.isArray(doc.tags) ? doc.tags : (typeof doc.tags === 'string' ? doc.tags.split(',') : [])).map(t => (typeof t === 'string' ? t.trim() : t)).filter(Boolean).map(tag => (
-                    <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded-full bg-apple-surface text-apple-muted">{tag}</span>
-                  ))}
-                </div>
-              )}
-            </motion.div>
+          {display?.map(doc => (
+            <DocumentCard key={doc.id} doc={doc} isSelected={viewDoc?.id === doc.id} onOpen={handleOpenDoc} onDelete={handleDeleteClick} highlightText={highlightText} searchQuery={searchQuery} />
           ))}
-        </div>
+        </motion.div>
 
         {/* Document Viewer Panel */}
         <AnimatePresence mode="wait">
@@ -199,8 +223,8 @@ export default function KnowledgeBase() {
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-subheading font-semibold truncate">{viewDoc.title}</h3>
                     <div className="flex gap-1">
-                      <button onClick={() => startEdit(viewDoc)} className="p-1 hover:bg-apple-surface rounded"><Edit3 size={14} className="text-apple-muted" /></button>
-                      <button onClick={closeViewer} className="p-1 hover:bg-apple-surface rounded"><X size={14} className="text-apple-muted" /></button>
+                      <button onClick={() => startEdit(viewDoc)} className="p-1 hover:bg-apple-surface rounded" aria-label="Edit document"><Edit3 size={14} className="text-apple-muted" /></button>
+                      <button onClick={closeViewer} className="p-1 hover:bg-apple-surface rounded" aria-label="Close viewer"><X size={14} className="text-apple-muted" /></button>
                     </div>
                   </div>
                   {viewDoc.source && <div className="text-micro text-apple-muted mb-2">Source: {viewDoc.source}</div>}
@@ -211,16 +235,13 @@ export default function KnowledgeBase() {
                       ))}
                     </div>
                   )}
-                  <div className="text-small text-apple-text whitespace-pre-line max-h-[50vh] overflow-y-auto" dangerouslySetInnerHTML={{ __html: renderContent(viewDoc.content) }} />
+                  <div className="text-small max-h-[50vh] overflow-y-auto"><Suspense fallback={<div className="h-4 w-full rounded animate-shimmer" style={{ background: 'var(--bg-surface)' }} />}><MarkdownMessage content={viewDoc.content} /></Suspense></div>
                 </>
               )}
             </motion.div>
           ) : (
             <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="card flex items-center justify-center h-64">
-              <div className="text-center">
-                <FileText size={24} className="mx-auto mb-2 text-apple-muted opacity-30" />
-                <p className="text-small text-apple-muted">Select a document to view</p>
-              </div>
+              <EmptyState icon="knowledge" title="Select a document to view" description="Choose from the list or create a new one" />
             </motion.div>
           )}
         </AnimatePresence>
@@ -239,6 +260,7 @@ export default function KnowledgeBase() {
           <motion.button whileTap={{ scale: 0.97 }} onClick={handleAdd} className="btn-primary flex items-center gap-2"><Plus size={14} /> Add</motion.button>
         </div>
       </Modal>
+      <ConfirmModal />
     </motion.div>
   )
 }

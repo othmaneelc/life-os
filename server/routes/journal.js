@@ -1,29 +1,48 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { v4: uuidv4 } = require('uuid')
 const { query, run, get } = require('../db/database')
+const { validate } = require('../middleware/validate')
 const { syncToObsidian } = require('../services/obsidianSync')
 
 const router = express.Router()
 
 router.get('/', (req, res) => {
   try {
-    const { date, search } = req.query
+    const { date, search, page: pageStr, limit: limitStr } = req.query
     if (date) {
       return res.json(get('SELECT * FROM journal_entries WHERE date = ?', [date]))
     }
     if (search) {
-      return res.json(query(
-        'SELECT * FROM journal_entries WHERE what_happened LIKE ? OR gratitude LIKE ? OR muhasaba LIKE ? ORDER BY date DESC',
-        [`%${search}%`, `%${search}%`, `%${search}%`]
-      ))
+      const escaped = search.replace(/[%_\\]/g, '\\$&')
+      let sql = "SELECT * FROM journal_entries WHERE what_happened LIKE ? ESCAPE '\\' OR gratitude LIKE ? ESCAPE '\\' OR muhasaba LIKE ? ESCAPE '\\' ORDER BY date DESC"
+      const params = [`%${escaped}%`, `%${escaped}%`, `%${escaped}%`]
+      if (pageStr) {
+        const page = Math.max(1, parseInt(pageStr) || 1)
+        const limit = Math.min(200, Math.max(1, parseInt(limitStr) || 50))
+        const offset = (page - 1) * limit
+        const total = get("SELECT COUNT(*) as count FROM journal_entries WHERE what_happened LIKE ? ESCAPE '\\' OR gratitude LIKE ? ESCAPE '\\' OR muhasaba LIKE ? ESCAPE '\\'", params).count
+        const data = query(sql + ' LIMIT ? OFFSET ?', [...params, limit, offset])
+        return res.json({ data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } })
+      }
+      return res.json(query(sql, params))
+    }
+    if (pageStr) {
+      const page = Math.max(1, parseInt(pageStr) || 1)
+      const limit = Math.min(200, Math.max(1, parseInt(limitStr) || 50))
+      const offset = (page - 1) * limit
+      const total = get('SELECT COUNT(*) as count FROM journal_entries', []).count
+      const data = query('SELECT * FROM journal_entries ORDER BY date DESC LIMIT ? OFFSET ?', [limit, offset])
+      return res.json({ data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } })
     }
     res.json(query('SELECT * FROM journal_entries ORDER BY date DESC'))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
-router.post('/', (req, res) => {
+router.post('/', validate({
+  date: [{ required: true }, { pattern: /^\d{4}-\d{2}-\d{2}$/ }],
+  mood: [{ type: 'number' }, { min: 1 }, { max: 5 }],
+}), (req, res) => {
   try {
     const { date, mood, what_happened, gratitude, muhasaba, tomorrow_intention, tags } = req.body
     const existing = get('SELECT * FROM journal_entries WHERE date = ?', [date])
@@ -31,7 +50,7 @@ router.post('/', (req, res) => {
       run(`UPDATE journal_entries SET mood=?, what_happened=?, gratitude=?, muhasaba=?, tomorrow_intention=?, tags=?, updated_at=datetime('now') WHERE date=?`,
         [mood, what_happened, gratitude, muhasaba, tomorrow_intention, tags ? JSON.stringify(tags) : null, date])
       const entry = get('SELECT * FROM journal_entries WHERE date = ?', [date])
-      setImmediate(() => syncToObsidian(entry))
+      setImmediate(() => { try { syncToObsidian(entry) } catch (e) { console.error('Obsidian sync failed:', e) } })
       return res.json(entry)
     }
     const id = uuidv4()
@@ -39,38 +58,30 @@ router.post('/', (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, date, mood, what_happened, gratitude, muhasaba, tomorrow_intention, tags ? JSON.stringify(tags) : null])
     const entry = get('SELECT * FROM journal_entries WHERE id = ?', [id])
-    setImmediate(() => syncToObsidian(entry))
+    setImmediate(() => { try { syncToObsidian(entry) } catch (e) { console.error('Obsidian sync failed:', e) } })
     res.json(entry)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/:date', (req, res) => {
   try {
     const entry = get('SELECT * FROM journal_entries WHERE date = ?', [req.params.date])
     res.json(entry || null)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/mood-trend', (req, res) => {
   try {
     const days = query("SELECT date, mood FROM journal_entries WHERE date >= date('now', '-30 days') ORDER BY date")
     res.json(days)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/photos/:date', (req, res) => {
   try {
     const photos = query('SELECT * FROM journal_photos WHERE entry_date = ? ORDER BY sort_order', [req.params.date])
     res.json(photos)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/upload', (req, res) => {
@@ -84,18 +95,14 @@ router.post('/upload', (req, res) => {
       [id, entry_date, photo_data, caption || null, sortOrder])
     const photo = get('SELECT * FROM journal_photos WHERE id = ?', [id])
     res.json(photo)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/photos/:id', (req, res) => {
   try {
     run('DELETE FROM journal_photos WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/ai-summary', async (req, res) => {
@@ -115,18 +122,14 @@ router.post('/ai-summary', async (req, res) => {
     })
     const data = await resp.json()
     res.json({ summary: data.choices?.[0]?.message?.content || 'Could not generate summary.' })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/:id', (req, res) => {
   try {
     run('DELETE FROM journal_entries WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

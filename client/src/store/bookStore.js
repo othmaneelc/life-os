@@ -1,9 +1,70 @@
-import { create } from 'zustand'
+import { createWithEqualityFn } from 'zustand/traditional'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 
 const API = '/api/books'
 
-export const useBookStore = create((set, get) => ({
+export function useBooks(status) {
+  return useQuery({
+    queryKey: ['books', status],
+    queryFn: async () => {
+      const params = status && status !== 'all' ? `?status=${status}` : ''
+      const r = await fetch(API + params)
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    staleTime: 30000,
+  })
+}
+
+export function useAddBook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (book) => {
+      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(book) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['books'] }); toast.success('Book added') },
+    onError: () => toast.error('Failed to add book'),
+  })
+}
+
+export function useUpdateBook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, updates }) => {
+      const r = await fetch(`${API}/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) })
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['books'] }); toast.success('Book updated') },
+    onError: () => toast.error('Failed to update book'),
+  })
+}
+
+export function useDeleteBook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id) => { const r = await fetch(`${API}/${id}`, { method: 'DELETE' }); if (!r.ok) throw new Error() },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['books'] }); toast.success('Book deleted') },
+    onError: () => toast.error('Failed to delete book'),
+  })
+}
+
+export function useBookNotes(bookId) {
+  return useQuery({
+    queryKey: ['bookNotes', bookId],
+    queryFn: async () => {
+      const r = await fetch(`${API}/${bookId}/notes`)
+      if (!r.ok) throw new Error()
+      return r.json()
+    },
+    enabled: !!bookId,
+  })
+}
+
+export const useBookStore = createWithEqualityFn((set, get) => ({
   books: [],
   notes: [],
   loading: false,
@@ -77,4 +138,4 @@ export const useBookStore = create((set, get) => ({
       await get().fetchNotes(bookId)
     } catch { toast.error('Failed to delete note') }
   },
-}))
+}), Object.is)

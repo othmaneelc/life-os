@@ -1,75 +1,117 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Check, Trash2, Target, Link, Edit3, X } from 'lucide-react'
-import { useGoalStore } from '../store/goalStore'
-import { useHabitStore } from '../store/habitStore'
+import { Plus, Check, Trash2, Target, Link, Edit3, X, Sparkles } from 'lucide-react'
+import EmptyState from '../components/EmptyState'
+import { staggerContainer, staggerItem } from '../utils/animations'
+import PageHeader from '../components/PageHeader'
+import { useGoals, useAddGoal, useUpdateGoal, useDeleteGoal, useAddStep, useToggleStep, useDeleteStep, useLinkHabit, useUnlinkHabit } from '../store/goalStore'
+import { useHabits } from '../store/habitStore'
 import Modal from '../components/Modal'
+import toast from 'react-hot-toast'
 
 const TIMEFRAMES = ['monthly', 'quarterly', 'yearly']
-const COLORS = ['#0071E3', '#34C759', '#FF9F0A', '#AF52DE', '#FF3B30', '#5AC8FA', '#FF2D55']
+const COLORS = ['#5B5BD6', '#34C759', '#FF9F0A', '#AF52DE', '#FF3B30', '#5AC8FA', '#FF2D55']
 
 export default function Goals() {
-  const { goals, loading, fetchGoals, addGoal, updateGoal, deleteGoal, addStep, toggleStep, deleteStep, linkHabit, unlinkHabit } = useGoalStore()
-  const { habits, fetchHabits } = useHabitStore()
+  const { data: goals = [], isLoading } = useGoals()
+  const addGoal = useAddGoal()
+  const updateGoal = useUpdateGoal()
+  const deleteGoal = useDeleteGoal()
+  const addStep = useAddStep()
+  const toggleStep = useToggleStep()
+  const deleteStep = useDeleteStep()
+  const linkHabit = useLinkHabit()
+  const unlinkHabit = useUnlinkHabit()
+  const { data: habits = [] } = useHabits()
   const [showModal, setShowModal] = useState(false)
   const [editingGoal, setEditingGoal] = useState(null)
   const [form, setForm] = useState({ title: '', description: '', timeframe: 'monthly', category: '', color: COLORS[0] })
-  const [newStep, setNewStep] = useState('')
+  const [stepInputs, setStepInputs] = useState({})
   const [linkingGoal, setLinkingGoal] = useState(null)
-
-  useEffect(() => { fetchGoals().catch(() => {}); fetchHabits().catch(() => {}) }, [])
+  const [coaching, setCoaching] = useState(null)
+  const [coachingLoading, setCoachingLoading] = useState(false)
 
   function handleSubmit(e) {
     e.preventDefault()
     if (!form.title.trim()) return
     if (editingGoal) {
-      updateGoal(editingGoal.id, form)
+      updateGoal.mutate({ id: editingGoal.id, updates: form })
     } else {
-      addGoal(form)
+      addGoal.mutate(form)
     }
     setShowModal(false)
     setEditingGoal(null)
     setForm({ title: '', description: '', timeframe: 'monthly', category: '', color: COLORS[0] })
   }
 
-  if (loading && !goals.length) {
+  async function getCoaching(goalId) {
+    setCoachingLoading(true)
+    setCoaching(null)
+    try {
+      const res = await fetch('/api/ai/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goalId }),
+      })
+      const data = await res.json()
+      if (data.error) { toast.error(data.error || 'Coaching failed'); return }
+      setCoaching(data.coaching)
+    } catch { toast.error('Failed to get coaching') }
+    finally { setCoachingLoading(false) }
+  }
+
+  if (isLoading && !goals.length) {
     return <div className="p-8 max-w-6xl mx-auto space-y-4">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="card h-32 animate-shimmer" />)}</div>
   }
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-8 max-w-6xl mx-auto space-y-6 ">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Target size={22} className="text-apple-muted" />
-          <h1 className="text-heading font-semibold">Goals</h1>
-        </div>
+      <PageHeader icon={Target} title="Goals" actions={
         <motion.button whileTap={{ scale: 0.95 }} onClick={() => { setEditingGoal(null); setForm({ title: '', description: '', timeframe: 'monthly', category: '', color: COLORS[0] }); setShowModal(true) }} className="btn-primary flex items-center gap-1">
           <Plus size={15} /> New Goal
         </motion.button>
-      </div>
+      } />
 
       {/* Stats */}
       {goals.length > 0 && (
-        <div className="grid grid-cols-4 gap-3">
+        <motion.div {...staggerContainer} className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
             { label: 'Total', value: goals.length, color: 'text-apple-blue' },
             { label: 'Active', value: goals.filter(g => g.progress < 100).length, color: 'text-apple-green' },
             { label: 'Completed', value: goals.filter(g => g.progress >= 100).length, color: 'text-apple-purple' },
             { label: 'Avg Progress', value: goals.length ? Math.round(goals.reduce((s, g) => s + g.progress, 0) / goals.length) + '%' : '0%', color: 'text-apple-amber' },
           ].map((s, i) => (
-            <motion.div key={s.label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0, transition: { delay: i * 0.04 } }} className="card">
+            <motion.div key={s.label} variants={staggerItem} className="card">
               <div className={`text-small text-apple-muted mb-1`}>{s.label}</div>
               <div className={`text-heading font-semibold ${s.color}`}>{s.value}</div>
             </motion.div>
-          ))}
-        </div>
+            ))}
+        </motion.div>
       )}
 
-      {/* Goals Grid */}
-      <div className="grid grid-cols-2 gap-4">
+      {/* AI Coach Modal */}
+        {coaching && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setCoaching(null)}>
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+              className="bg-apple-card border border-apple-border rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles size={16} className="text-apple-purple" />
+                <span className="text-body font-semibold text-apple-text">AI Coach</span>
+              </div>
+              <p className="text-body text-apple-text leading-relaxed whitespace-pre-wrap">{coaching}</p>
+              <button onClick={() => setCoaching(null)}
+                className="mt-4 px-4 py-2 text-small font-medium rounded-lg bg-apple-surface text-apple-text hover:bg-apple-elevated transition-colors">
+                Close
+              </button>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Goals Grid */}
+        <motion.div {...staggerContainer} className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {goals.filter(g => g.progress < 100).concat(goals.filter(g => g.progress >= 100)).map((goal, i) => (
-          <motion.div key={goal.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0, transition: { delay: i * 0.03 } }}
+          <motion.div key={goal.id} variants={staggerItem}
             className={`card ${goal.progress >= 100 ? 'opacity-70' : ''}`}>
             {/* Goal Header */}
             <div className="flex items-start justify-between mb-3">
@@ -81,8 +123,8 @@ export default function Goals() {
                 </div>
               </div>
               <div className="flex items-center gap-1 ml-2">
-                <button onClick={() => { setEditingGoal(goal); setForm({ title: goal.title, description: goal.description || '', timeframe: goal.timeframe, category: goal.category || '', color: goal.color }); setShowModal(true) }} className="p-1 hover:bg-apple-surface rounded"><Edit3 size={13} className="text-apple-muted" /></button>
-                <button onClick={() => deleteGoal(goal.id)} className="p-1 hover:bg-apple-red/10 rounded"><Trash2 size={13} className="text-apple-red" /></button>
+                <button onClick={() => { setEditingGoal(goal); setForm({ title: goal.title, description: goal.description || '', timeframe: goal.timeframe, category: goal.category || '', color: goal.color }); setShowModal(true) }} aria-label="Edit goal" className="p-1 hover:bg-apple-surface rounded"><Edit3 size={13} className="text-apple-muted" /></button>
+                <button onClick={() => deleteGoal.mutate(goal.id)} aria-label="Delete goal" className="p-1 hover:bg-apple-red/10 rounded"><Trash2 size={13} className="text-apple-red" /></button>
               </div>
             </div>
 
@@ -93,29 +135,35 @@ export default function Goals() {
             </div>
             <div className="flex items-center justify-between text-micro text-apple-muted mb-3">
               <span>{goal.progress}% complete ({goal.done_steps || 0}/{goal.total_steps || 0} steps)</span>
-              {goal.timeframe && <span className="badge-gray">{goal.timeframe}</span>}
+              <div className="flex items-center gap-1">
+                <button onClick={() => getCoaching(goal.id)} disabled={coachingLoading}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-apple-purple/10 text-apple-purple hover:bg-apple-purple/20 transition-colors text-micro">
+                  <Sparkles size={10} /> {coachingLoading ? '...' : 'AI Coach'}
+                </button>
+                {goal.timeframe && <span className="badge-gray">{goal.timeframe}</span>}
+              </div>
             </div>
 
             {/* Steps */}
             <div className="space-y-1 mb-3">
               {(goal.steps || []).slice(0, 5).map(step => (
                 <div key={step.id} className="flex items-center gap-2 py-1 group">
-                  <button onClick={() => toggleStep(goal.id, step.id)}
+                  <button onClick={() => toggleStep.mutate({ goalId: goal.id, stepId: step.id })} aria-label="Toggle step completion"
                     className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${step.done ? 'border-apple-green bg-apple-green' : 'border-apple-border hover:border-apple-blue'}`}>
                     {step.done && <Check size={10} className="text-white" />}
                   </button>
                   <span className={`text-small flex-1 ${step.done ? 'text-apple-muted line-through' : 'text-apple-text '}`}>
                     {step.title}
                   </span>
-                  <button onClick={() => deleteStep(goal.id, step.id)} className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-apple-surface rounded"><X size={11} className="text-apple-muted" /></button>
+                  <button onClick={() => deleteStep.mutate({ goalId: goal.id, stepId: step.id })} aria-label="Remove step" className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-apple-surface rounded"><X size={11} className="text-apple-muted" /></button>
                 </div>
               ))}
             </div>
 
             {/* Add Step */}
-            <form onSubmit={e => { e.preventDefault(); if (newStep.trim()) { addStep(goal.id, newStep.trim()); setNewStep('') } }} className="flex gap-1 mb-3">
-              <input type="text" value={newStep} onChange={e => setNewStep(e.target.value)} placeholder="Add step..." className="input-field text-small flex-1" />
-              <button type="submit" className="btn-primary text-small px-3 py-1"><Plus size={13} /></button>
+            <form onSubmit={e => { e.preventDefault(); const val = (stepInputs[goal.id] || '').trim(); if (val) { addStep.mutate({ goalId: goal.id, title: val }); setStepInputs(prev => ({...prev, [goal.id]: ''})) } }} className="flex gap-1 mb-3">
+              <input type="text" value={stepInputs[goal.id] || ''} onChange={e => setStepInputs(prev => ({...prev, [goal.id]: e.target.value}))} placeholder="Add step..." className="input-field text-small flex-1" />
+              <button type="submit" aria-label="Add step" className="btn-primary text-small px-3 py-1"><Plus size={13} /></button>
             </form>
 
             {/* Linked Habits */}
@@ -125,7 +173,7 @@ export default function Goals() {
                 return h ? (
                   <span key={hid} className="badge-gray text-micro flex items-center gap-1">
                     <Link size={10} /> {h.name}
-                    <button onClick={() => unlinkHabit(goal.id, hid)} className="hover:text-apple-red"><X size={10} /></button>
+                    <button onClick={() => unlinkHabit.mutate({ goalId: goal.id, habitId: hid })} aria-label="Unlink habit" className="hover:text-apple-red"><X size={10} /></button>
                   </span>
                 ) : null
               })}
@@ -135,14 +183,16 @@ export default function Goals() {
             </div>
           </motion.div>
         ))}
-      </div>
+      </motion.div>
 
       {!goals.length && (
-        <div className="card text-center py-12">
-          <Target size={32} className="mx-auto mb-3 opacity-30 text-apple-muted" />
-          <p className="text-body text-apple-muted">No goals yet</p>
-          <p className="text-small text-apple-muted mt-1">Set your first goal to start tracking progress</p>
-        </div>
+        <EmptyState
+          icon="goals"
+          title="No goals yet"
+          description="Set your first goal to start tracking progress"
+          actionLabel="New Goal"
+          onAction={() => { setEditingGoal(null); setShowModal(true) }}
+        />
       )}
 
       {/* Goal Modal */}
@@ -156,7 +206,7 @@ export default function Goals() {
             <label className="section-label block mb-1">Description</label>
             <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="input-field" rows={2} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="section-label block mb-1">Timeframe</label>
               <select value={form.timeframe} onChange={e => setForm(f => ({ ...f, timeframe: e.target.value }))} className="input-field">
@@ -189,7 +239,7 @@ export default function Goals() {
       <Modal open={!!linkingGoal} onClose={() => setLinkingGoal(null)} title="Link Habit" maxWidth="sm">
         <div className="space-y-1 max-h-60 overflow-y-auto">
           {habits.filter(h => !goals.find(g => g.id === linkingGoal)?.habit_ids?.includes(h.id)).map(h => (
-            <button key={h.id} onClick={() => { linkHabit(linkingGoal, h.id); setLinkingGoal(null) }}
+            <button key={h.id} onClick={() => { linkHabit.mutate({ goalId: linkingGoal, habit_id: h.id }); setLinkingGoal(null) }}
               className="w-full text-left px-3 py-2 rounded-md hover:bg-apple-surface transition-colors text-body">
               {h.name}
             </button>

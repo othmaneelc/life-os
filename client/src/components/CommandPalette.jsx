@@ -1,16 +1,19 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Calendar, CheckSquare, BookOpen, Moon,
   Dumbbell, Briefcase, Settings, BarChart3, Sun,
   Plus, Search, ArrowRight, Wallet,
-  Target, BookMarked, Sparkles
+  Target, BookMarked, Sparkles, Undo2, Play,
+  AlertTriangle, Mic
 } from 'lucide-react'
 import { useThemeStore } from '../store/themeStore'
 import { useTaskStore } from '../store/taskStore'
 import { useHabitStore } from '../store/habitStore'
 import { useJournalStore } from '../store/journalStore'
+import { useVoiceStore } from '../store/voiceStore'
+import toast from 'react-hot-toast'
 
 const NAVIGATION_ITEMS = [
   { id: 'nav-dashboard', label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -31,9 +34,11 @@ const NAVIGATION_ITEMS = [
 const ACTION_ITEMS = [
   { id: 'action-theme', label: 'Toggle Theme', action: 'toggleTheme', icon: Sun },
   { id: 'action-review', label: 'Open Daily Review', action: 'dailyReview', icon: BookOpen },
+  { id: 'action-voice', label: 'Voice Command', action: 'voiceCommand', icon: Mic },
   { id: 'action-ai-chat', label: 'AI Chat', action: 'aiChat', icon: Sparkles },
   { id: 'action-add-task', label: 'Quick Add Task', action: 'addTask', icon: Plus },
-
+  { id: 'action-add-journal', label: 'Quick Journal Entry', action: 'addJournal', icon: BookOpen },
+  { id: 'action-add-habit', label: 'Quick Add Habit', action: 'addHabit', icon: Plus },
 ]
 
 function fuzzyMatch(text, query) {
@@ -43,16 +48,20 @@ function fuzzyMatch(text, query) {
   return t.includes(q) || t.split(/\s+/).some(w => w.startsWith(q))
 }
 
-export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, onOpenAddHabit, onOpenAIChat }) {
+const CommandPalette = memo(function CommandPalette({ onClose, onOpenReview, onOpenAddTask, onOpenAddHabit, onOpenAIChat, onOpenAddJournal }) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef(null)
   const listRef = useRef(null)
   const navigate = useNavigate()
   const { theme, setTheme } = useThemeStore()
-  const tasks = useTaskStore(s => s.tasks)
-  const habits = useHabitStore(s => s.habits)
-  const entries = useJournalStore(s => s.entries)
+  const tasks = useTaskStore(s => s.tasks) || []
+  const habits = useHabitStore(s => s.habits) || []
+  const entries = useJournalStore(s => s.entries) || []
+  const pendingActions = useVoiceStore(s => s.pendingActions)
+  const undoAction = useVoiceStore(s => s.undoAction)
+  const executeAction = useVoiceStore(s => s.executeAction)
+  const confirmHighRisk = useVoiceStore(s => s.confirmHighRisk)
 
   const recentTasks = useMemo(() => tasks.slice(0, 5), [tasks])
   const recentHabits = useMemo(() => habits.slice(0, 5), [habits])
@@ -64,6 +73,21 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
   const filteredActions = useMemo(() =>
     ACTION_ITEMS.filter(item => fuzzyMatch(item.label, query)), [query])
 
+  const quickCreate = useMemo(() => {
+    if (!query || query.length < 2) return []
+    const results = []
+    const ql = query.toLowerCase()
+    if (ql.startsWith('task ') || ql.startsWith('t:'))
+      results.push({ id: 'qc-task', label: `Create task: ${query.replace(/^(task|t):?\s*/i, '')}`, type: 'quickcreate', action: 'createTask', icon: Plus })
+    if (ql.startsWith('journal ') || ql.startsWith('j:'))
+      results.push({ id: 'qc-journal', label: `Create journal: ${query.replace(/^(journal|j):?\s*/i, '')}`, type: 'quickcreate', action: 'createJournal', icon: BookOpen })
+    if (ql.startsWith('habit ') || ql.startsWith('h:'))
+      results.push({ id: 'qc-habit', label: `Create habit: ${query.replace(/^(habit|h):?\s*/i, '')}`, type: 'quickcreate', action: 'createHabit', icon: Plus })
+    if (ql.startsWith('pray ') || ql.startsWith('p:'))
+      results.push({ id: 'qc-prayer', label: `Log prayer: ${query.replace(/^(pray|p):?\s*/i, '')}`, type: 'quickcreate', action: 'logPrayer', icon: Plus })
+    return results
+  }, [query])
+
   const filteredTasks = useMemo(() =>
     query ? recentTasks.filter(t => fuzzyMatch(t.title || t.text || '', query)) : [], [query, recentTasks])
 
@@ -73,8 +97,33 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
   const filteredEntries = useMemo(() =>
     query ? recentEntries.filter(e => fuzzyMatch(e.title || e.content || '', query)) : [], [query, recentEntries])
 
+  const voicePendingItems = useMemo(() => {
+    if (!query || fuzzyMatch('pending', query)) return pendingActions
+    return pendingActions.filter(pa =>
+      fuzzyMatch(pa.natural_summary || pa.transcript, query)
+    )
+  }, [pendingActions, query])
+
   const groupedResults = useMemo(() => {
     const groups = []
+    if (voicePendingItems.length) {
+      groups.push({ title: '🎤 Pending Voice', items: voicePendingItems.map(pa => ({
+        id: pa.inboxId,
+        label: pa.natural_summary || pa.transcript,
+        type: 'voice',
+        icon: pa.riskLevel === 'high' ? AlertTriangle : Mic,
+        inboxId: pa.inboxId,
+        remainingMs: pa.remainingMs,
+        paused: pa.paused,
+        executed: pa.executed,
+        riskLevel: pa.riskLevel,
+        actions: pa.actions,
+        results: pa.results,
+      })) })
+    }
+    if (quickCreate.length) {
+      groups.push({ title: 'Quick Create', items: quickCreate })
+    }
     if (filteredNavigation.length) {
       groups.push({ title: 'Navigation', items: filteredNavigation.map(i => ({ ...i, type: 'nav' })) })
     }
@@ -91,7 +140,7 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
       groups.push({ title: 'Journal', items: filteredEntries.map(i => ({ ...i, type: 'entry' })) })
     }
     return groups
-  }, [filteredNavigation, filteredActions, filteredTasks, filteredHabits, filteredEntries])
+  }, [voicePendingItems, filteredNavigation, filteredActions, filteredTasks, filteredHabits, filteredEntries])
 
   const flatItems = useMemo(() =>
     groupedResults.flatMap(g => g.items), [groupedResults])
@@ -107,6 +156,39 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
   const handleSelect = useCallback((item) => {
     if (item.type === 'nav') {
       navigate(item.path)
+    } else if (item.type === 'quickcreate') {
+      const text = query.replace(/^(task|t|journal|j|habit|h|pray|p):?\s*/i, '').trim()
+      if (!text) return
+      switch (item.action) {
+        case 'createTask': {
+          fetch('/api/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: text, category: 'personal', priority: 'medium' }),
+          }).catch(() => { toast.error('Failed to create task') })
+          setQuery('')
+          toast.success('Task created')
+          break
+        }
+        case 'createJournal': {
+          const today = new Date().toISOString().split('T')[0]
+          fetch('/api/journal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: today, what_happened: text }),
+          }).catch(() => { toast.error('Failed to create journal entry') })
+          setQuery('')
+          toast.success('Journal entry created')
+          break
+        }
+        case 'createHabit':
+          onOpenAddHabit?.()
+          break
+        case 'logPrayer':
+          navigate('/prayers')
+          break
+      }
+      onClose?.()
     } else if (item.type === 'action') {
       switch (item.action) {
         case 'toggleTheme':
@@ -121,9 +203,16 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
         case 'addTask':
           onOpenAddTask?.()
           break
+        case 'addJournal':
+          onOpenAddJournal?.()
+          break
         case 'addHabit':
           onOpenAddHabit?.()
           break
+        case 'voiceCommand':
+          window.__startVoiceRecording?.()
+          onClose?.()
+          return
         case 'aiChat':
           onOpenAIChat?.()
           break
@@ -134,9 +223,16 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
       navigate('/habits')
     } else if (item.type === 'entry') {
       navigate('/journal')
+    } else if (item.type === 'voice') {
+      if (item.paused && !item.executed) {
+        confirmHighRisk(item.inboxId)
+      } else if (!item.executed) {
+        executeAction(item.inboxId)
+      }
+      return
     }
     onClose?.()
-  }, [navigate, theme, setTheme, onClose, onOpenReview, onOpenAddTask, onOpenAddHabit, onOpenAIChat])
+  }, [navigate, theme, setTheme, onClose, onOpenReview, onOpenAddTask, onOpenAddHabit, onOpenAddJournal, onOpenAIChat, confirmHighRisk, executeAction, query, setQuery])
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -205,6 +301,57 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
                     const globalIdx = itemOffset + group.items.indexOf(item)
                     const isSelected = globalIdx === selectedIndex
                     const Icon = item.icon || (item.type === 'task' ? CheckSquare : item.type === 'habit' ? Dumbbell : BookOpen)
+                    if (item.type === 'voice') {
+                      return (
+                        <div
+                          key={item.id}
+                          data-selected={isSelected}
+                          onMouseEnter={() => setSelectedIndex(globalIdx)}
+                          className={`w-full flex items-center gap-2 px-4 py-2 text-body transition-colors ${
+                            item.riskLevel === 'high'
+                              ? 'bg-amber-500/10 border-l-2 border-amber-400'
+                              : isSelected ? 'bg-apple-blue/10' : 'hover:bg-apple-surface'
+                          } ${item.executed ? 'opacity-60' : ''}`}
+                        >
+                          <Icon size={14} className={item.riskLevel === 'high' ? 'text-amber-400' : 'text-apple-muted'} />
+                          <span className="flex-1 text-left truncate text-small">{item.label}</span>
+                          {item.executed ? (
+                            <span className="text-micro text-apple-green font-medium">Done</span>
+                          ) : item.paused ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-micro text-amber-500 font-medium">Requires approval</span>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); confirmHighRisk(item.inboxId) }}
+                                className="p-1 rounded hover:bg-amber-500/20 text-amber-500"
+                                title="Confirm"
+                              >
+                                <Play size={12} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-micro text-apple-muted w-6 text-right tabular-nums">
+                                {Math.ceil(item.remainingMs / 1000)}s
+                              </span>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); executeAction(item.inboxId) }}
+                                className="p-1 rounded hover:bg-apple-green/20 text-apple-green"
+                                title="Execute now"
+                              >
+                                <Play size={12} />
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); undoAction(item.inboxId) }}
+                                className="p-1 rounded hover:bg-red-500/20 text-red-400"
+                                title="Undo"
+                              >
+                                <Undo2 size={12} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    }
                     return (
                       <button
                         key={item.id}
@@ -248,4 +395,6 @@ export default function CommandPalette({ onClose, onOpenReview, onOpenAddTask, o
       </AnimatePresence>
     </div>
   )
-}
+})
+
+export default CommandPalette

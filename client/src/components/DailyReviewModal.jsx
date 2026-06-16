@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, memo } from 'react'
 import { motion } from 'framer-motion'
 import { Check } from 'lucide-react'
 import Modal from './Modal'
-import { useReviewStore } from '../store/reviewStore'
-import { useTaskStore } from '../store/taskStore'
+import { useTodayReview, useSaveReview } from '../store/reviewStore'
+import { useTaskStore, useTasks } from '../store/taskStore'
 import { getTodayStr } from '../utils/dateHelpers'
 import toast from 'react-hot-toast'
 
-export default function DailyReviewModal({ open, onClose }) {
+const DailyReviewModal = memo(function DailyReviewModal({ open, onClose }) {
   const today = getTodayStr()
   const [energy, setEnergy] = useState(3)
   const [wins, setWins] = useState('')
@@ -15,16 +15,14 @@ export default function DailyReviewModal({ open, onClose }) {
   const [tomorrowFocus, setTomorrowFocus] = useState('')
   const [completed, setCompleted] = useState(false)
 
-  const todayReview = useReviewStore(s => s.todayReview)
-  const save = useReviewStore(s => s.save)
-  const fetchToday = useReviewStore(s => s.fetchToday)
-  const tasks = useTaskStore(s => s.tasks)
-  const fetchTasks = useTaskStore(s => s.fetchTasks)
+  const { data: todayReview } = useTodayReview(open ? today : null)
+  const save = useSaveReview()
+  const tasks = useTaskStore(s => s.tasks) || []
+  const { refetch: refetchTasks } = useTasks()
 
   useEffect(() => {
     if (!open) return
-    fetchToday(today)
-    fetchTasks()
+    refetchTasks()
   }, [open])
 
   useEffect(() => {
@@ -40,9 +38,10 @@ export default function DailyReviewModal({ open, onClose }) {
   const todayTasksDone = tasks.filter(t => t.status === 'done' && t.completed_at?.startsWith(today))
   const todayTaskTitles = todayTasksDone.map(t => t.title).join('\n')
 
-  async function handleSave() {
-    const r = await save({ date: today, energy, wins, lessons, tomorrow_focus: tomorrowFocus, completed })
-    if (r) { toast.success(completed ? 'Day completed!' : 'Review saved'); onClose() }
+  function handleSave() {
+    save.mutate({ date: today, energy, wins, lessons, tomorrow_focus: tomorrowFocus, completed }, {
+      onSuccess: () => { toast.success(completed ? 'Day completed!' : 'Review saved'); onClose() }
+    })
   }
 
   return (
@@ -98,4 +97,6 @@ export default function DailyReviewModal({ open, onClose }) {
       </div>
     </Modal>
   )
-}
+})
+
+export default DailyReviewModal

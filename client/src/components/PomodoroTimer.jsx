@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Pause, X, RotateCcw, Timer as TimerIcon } from 'lucide-react'
-import { usePomodoroStore } from '../store/pomodoroStore'
+import { useAddPomodoroSession } from '../store/pomodoroStore'
 import toast from 'react-hot-toast'
 
 const POMODORO_MIN = 25
@@ -13,8 +13,9 @@ export default function PomodoroTimer() {
   const [running, setRunning] = useState(false)
   const [taskTitle, setTaskTitle] = useState('')
   const intervalRef = useRef(null)
-  const addSession = usePomodoroStore(s => s.addSession)
+  const addSession = useAddPomodoroSession()
   const pausedRef = useRef(false)
+  const initialMountRef = useRef(true)
 
   const startTimer = useCallback(() => {
     if (running) return
@@ -46,8 +47,9 @@ export default function PomodoroTimer() {
   }, [running])
 
   useEffect(() => {
+    if (initialMountRef.current) { initialMountRef.current = false; return }
     if (timeLeft > 0 || pausedRef.current) return
-    addSession({ duration_min: POMODORO_MIN, task_title: taskTitle, completed: true })
+    addSession.mutate({ duration_min: POMODORO_MIN, task_title: taskTitle, completed: true })
     toast.success('Pomodoro complete! Take a break.')
     try {
       if (Notification.permission === 'granted') new Notification('Pomodoro Complete!', { body: 'Great focus session. Take a 5 min break.' })
@@ -84,7 +86,7 @@ export default function PomodoroTimer() {
         >
           <div className="flex items-center justify-between mb-3">
             <span className="text-small font-semibold text-apple-text">Pomodoro</span>
-            <motion.button whileTap={{ scale: 0.9 }} onClick={() => { resetTimer(); setMinimized(true) }} className="p-0.5 hover:bg-apple-surface rounded">
+            <motion.button whileTap={{ scale: 0.9 }} onClick={() => { resetTimer(); setMinimized(true) }} className="p-0.5 hover:bg-apple-surface rounded" aria-label="Close timer">
               <X size={14} className="text-apple-muted" />
             </motion.button>
           </div>

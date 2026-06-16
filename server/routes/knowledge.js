@@ -1,4 +1,5 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { v4: uuidv4 } = require('uuid')
 const { query, run, get } = require('../db/database')
 
@@ -25,7 +26,7 @@ function searchDocs(term) {
       return query(`SELECT doc.* FROM kb_documents doc JOIN kb_fts ON doc.rowid = kb_fts.rowid WHERE kb_fts MATCH ? ORDER BY rank`, [sanitized + '*'])
     } catch {}
   }
-  const like = `%${term.replace(/'/g, "''")}%`
+  const like = `%${term}%`
   return query('SELECT * FROM kb_documents WHERE title LIKE ? OR content LIKE ? ORDER BY created_at DESC LIMIT 20', [like, like])
 }
 
@@ -50,7 +51,7 @@ router.get('/', (req, res) => {
     const { search } = req.query
     if (search) return res.json(searchDocs(search))
     res.json(query('SELECT * FROM kb_documents ORDER BY created_at DESC'))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/', (req, res) => {
@@ -61,7 +62,7 @@ router.post('/', (req, res) => {
       [id, title, content || '', source_url || null, source_type || 'note'])
     syncFts(id)
     res.json(get('SELECT * FROM kb_documents WHERE id = ?', [id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.put('/:id', (req, res) => {
@@ -72,12 +73,12 @@ router.put('/:id', (req, res) => {
     if (content !== undefined) { fields.push('content = ?'); params.push(content) }
     if (source_url !== undefined) { fields.push('source_url = ?'); params.push(source_url) }
     if (source_type !== undefined) { fields.push('source_type = ?'); params.push(source_type) }
-    fields.push('updated_at = datetime("now")')
+    fields.push("updated_at = datetime('now')")
     params.push(req.params.id)
     run(`UPDATE kb_documents SET ${fields.join(', ')} WHERE id = ?`, params)
     syncFts(req.params.id)
     res.json(get('SELECT * FROM kb_documents WHERE id = ?', [req.params.id]))
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/:id', (req, res) => {
@@ -86,7 +87,7 @@ router.delete('/:id', (req, res) => {
     if (doc) deleteFts(doc.rowid)
     run('DELETE FROM kb_documents WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/ai', async (req, res) => {
@@ -102,15 +103,15 @@ router.post('/ai', async (req, res) => {
     if (docs.length === 0) return res.json({ answer: 'No relevant documents found in your Knowledge Base.', sources: [] })
 
     // Check for AI API key in settings
-    const apiKey = get('SELECT value FROM settings WHERE key = ?', ['ai_api_key'])
+    const apiKey = get('SELECT value FROM settings WHERE key = ?', ['groq_key'])
     if (apiKey) {
       try {
         const { default: fetch } = await import('node-fetch')
         const context = docs.map(d => `[${d.title}]: ${d.content?.slice(0, 2000)}`).join('\n\n')
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.value}` },
-          body: JSON.stringify({ model: 'gpt-4o-mini', messages: [
+          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [
             { role: 'system', content: 'Answer based only on the provided context. If unsure, say so.' },
             { role: 'user', content: `Context:\n${context}\n\nQuestion: ${question}` }
           ], max_tokens: 1000 })
@@ -125,7 +126,7 @@ router.post('/ai', async (req, res) => {
     // No AI: return relevant snippets
     const snippets = docs.map(d => `**${d.title}**: ${d.content?.slice(0, 500)}`).join('\n\n---\n\n')
     res.json({ answer: `Found ${docs.length} relevant document(s):\n\n${snippets}`, sources: docs.map(d => ({ title: d.title, id: d.id })) })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

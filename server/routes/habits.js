@@ -1,6 +1,7 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { v4: uuidv4 } = require('uuid')
-const { query, run, get } = require('../db/database')
+const { query, run, get, getDatabase } = require('../db/database')
 
 const router = express.Router()
 
@@ -8,9 +9,7 @@ router.get('/', (req, res) => {
   try {
     const habits = query('SELECT * FROM habits WHERE active = 1 ORDER BY sort_order')
     res.json(habits)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/today', (req, res) => {
@@ -20,9 +19,7 @@ router.get('/today', (req, res) => {
       FROM habits h LEFT JOIN habit_logs hl ON h.id = hl.habit_id AND hl.date = ?
       WHERE h.active = 1 ORDER BY h.sort_order`, [today])
     res.json(habits)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/week', (req, res) => {
@@ -38,29 +35,35 @@ router.get('/week', (req, res) => {
 
     const habits = query('SELECT * FROM habits WHERE active = 1 ORDER BY sort_order')
     const logs = query('SELECT * FROM habit_logs WHERE date >= ? AND date <= ?', [startStr, endStr])
-
-    function getStreak(habitId) {
-      const doneLogs = query('SELECT date FROM habit_logs WHERE habit_id = ? AND done = 1 ORDER BY date DESC', [habitId])
-      if (!doneLogs.length) return 0
-      let streak = 0
-      for (let i = 0; i < doneLogs.length; i++) {
-        const expected = new Date()
-        expected.setDate(expected.getDate() - i)
-        const expectedDate = expected.toISOString().split('T')[0]
-        if (doneLogs[i].date === expectedDate) { streak++ } else { break }
-      }
-      return streak
+    // Pre-fetch all done logs for streak calculation (eliminates N+1)
+    const allDoneLogs = query('SELECT habit_id, date FROM habit_logs WHERE done = 1 ORDER BY date DESC')
+    const logsByHabit = {}
+    for (const l of allDoneLogs) {
+      if (!logsByHabit[l.habit_id]) logsByHabit[l.habit_id] = []
+      logsByHabit[l.habit_id].push(l.date)
     }
 
-    const result = habits.map(h => ({
-      ...h,
-      logs: logs.filter(l => l.habit_id === h.id),
-      streak: getStreak(h.id),
-    }))
+    const result = habits.map(h => {
+      let streak = 0
+      const hDoneDates = logsByHabit[h.id] || []
+      for (let i = 0; i < 365; i++) {
+        const d = new Date()
+        d.setDate(d.getDate() - i)
+        const dStr = d.toISOString().split('T')[0]
+        if (hDoneDates.includes(dStr)) {
+          streak++
+        } else {
+          break
+        }
+      }
+      return {
+        ...h,
+        logs: logs.filter(l => l.habit_id === h.id),
+        streak,
+      }
+    })
     res.json({ start: startStr, end: endStr, habits: result })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/month', (req, res) => {
@@ -69,9 +72,7 @@ router.get('/month', (req, res) => {
     if (!start || !end) return res.status(400).json({ error: 'start and end required' })
     const logs = query('SELECT * FROM habit_logs WHERE date >= ? AND date <= ?', [start, end])
     res.json(logs)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/log', (req, res) => {
@@ -85,9 +86,7 @@ router.post('/log', (req, res) => {
         [uuidv4(), habit_id, date, done ? 1 : 0])
     }
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.get('/stats', (req, res) => {
@@ -163,34 +162,33 @@ router.get('/stats', (req, res) => {
       needsAttention: needsAttention.slice(0, 3),
       perfectDays,
     })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/', (req, res) => {
   try {
     const { name, category, frequency } = req.body
+    if (!name || typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'name is required' })
     const id = uuidv4()
     const maxOrder = get('SELECT MAX(sort_order) as max FROM habits')
     run('INSERT INTO habits (id, name, category, frequency, active, sort_order) VALUES (?, ?, ?, ?, 1, ?)',
       [id, name, category, frequency || 'daily', (maxOrder?.max || 10) + 1])
     res.json(get('SELECT * FROM habits WHERE id = ?', [id]))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.put('/reorder', (req, res) => {
   try {
     const { order } = req.body
     if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array' })
-    const stmt = 'UPDATE habits SET sort_order = ? WHERE id = ?'
-    order.forEach((id, idx) => run(stmt, [idx, id]))
+    const db = getDatabase()
+    const tx = db.transaction(() => {
+      const stmt = 'UPDATE habits SET sort_order = ? WHERE id = ?'
+      order.forEach((id, idx) => run(stmt, [idx, id]))
+    })
+    tx()
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.put('/:id', (req, res) => {
@@ -199,18 +197,14 @@ router.put('/:id', (req, res) => {
     run('UPDATE habits SET name=COALESCE(?,name), category=COALESCE(?,category), frequency=COALESCE(?,frequency) WHERE id=?',
       [name, category, frequency, req.params.id])
     res.json(get('SELECT * FROM habits WHERE id = ?', [req.params.id]))
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.delete('/:id', (req, res) => {
   try {
     run('UPDATE habits SET active = 0 WHERE id = ?', [req.params.id])
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

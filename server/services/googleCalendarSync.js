@@ -78,7 +78,7 @@ function getSyncStatus() {
   const lastSync = get('SELECT value FROM settings WHERE key = ?', ['google_calendar_last_sync'])
   return {
     lastSync: lastSync?.value || null,
-    eventCount: query('SELECT COUNT(*) as count FROM google_calendar_events')[0]?.count || 0,
+    eventCount: get('SELECT COUNT(*) as count FROM google_calendar_events')?.count || 0,
   }
 }
 

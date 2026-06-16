@@ -1,460 +1,375 @@
-import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
-import { motion, useMotionValue, useTransform } from 'framer-motion'
-import { Star, Target, Flame, Calendar, Clock, ChevronRight, Sparkles, Brain, TrendingUp, DollarSign, BookOpen, BarChart3, RefreshCw } from 'lucide-react'
-import StatCard from '../components/StatCard'
-import PrayerRow from '../components/PrayerRow'
+import { useEffect, useState, useMemo, useRef, useCallback, lazy, Suspense } from 'react'
+
+import { useQuery } from '@tanstack/react-query'
+import { motion, AnimatePresence } from 'framer-motion'
+import { DndContext, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { Brain, TrendingUp, Star, Target, Activity, BookOpen, Sparkles, Flame, Clock as ClockIcon, GripVertical, Eye, EyeOff, RotateCcw, Maximize2, Minimize2, Cloud, CloudSun, CloudRain, CloudSnow, CloudLightning, CloudFog, Sun, Moon, Sunrise, Sunset } from 'lucide-react'
 import DailyReviewModal from '../components/DailyReviewModal'
-import { useTaskStore } from '../store/taskStore'
+import { useTaskStore, useTasks } from '../store/taskStore'
 import { usePrayerStore } from '../store/prayerStore'
-import { useHabitStore } from '../store/habitStore'
-import { useAgencyStore } from '../store/agencyStore'
-import { useReviewStore } from '../store/reviewStore'
-import { useFinanceStore } from '../store/financeStore'
-import { useJournalStore } from '../store/journalStore'
+import { useHabitStore, useTodayHabits, useHabitStats } from '../store/habitStore'
+import { useAgencyStore, useAgencyClients } from '../store/agencyStore'
+import { useTodayReview } from '../store/reviewStore'
+import { useFinanceStore, useTransactions } from '../store/financeStore'
+import { useJournalEntries } from '../store/journalStore'
 import { useAIStore } from '../store/aiStore'
-import { usePrayerTimes, useLiveClock } from '../hooks/usePrayerTimes'
+import PatternIntelligence from '../components/PatternIntelligence'
+import { useDashboardStore } from '../store/dashboardStore'
+import { usePrayerTimes } from '../hooks/usePrayerTimes'
 import { useGoogleCalendar } from '../hooks/useGoogleCalendar'
+import { useWeather } from '../hooks/useWeather'
 import { getGreeting, getFormattedDate, getTodayStr, getDaysSince } from '../utils/dateHelpers'
-import { prayerNames, motivations } from '../utils/formatters'
-import { staggerContainer, staggerItem, bentoCard } from '../utils/animations'
+import { motivations } from '../utils/formatters'
+import { scrollReveal } from '../utils/animations'
+import FlipClock from '../components/FlipClock'
+import AmbientParticles from '../components/AmbientParticles'
+const TypewriterText = lazy(() => import('../widgets/TypewriterText'))
+const AIBriefing = lazy(() => import('../widgets/AIBriefing'))
+const RevenuePipeline = lazy(() => import('../widgets/RevenuePipeline'))
+const TopPriority = lazy(() => import('../widgets/TopPriority'))
+const TodayStats = lazy(() => import('../widgets/TodayStats'))
+const PrayerTimes = lazy(() => import('../widgets/PrayerTimes'))
+const QuickCheck = lazy(() => import('../widgets/QuickCheck'))
+const LatestJournal = lazy(() => import('../widgets/LatestJournal'))
+const DailyReview = lazy(() => import('../widgets/DailyReview'))
+const QuickOverview = lazy(() => import('../widgets/QuickOverview'))
 
-function TypewriterText({ text, delay = 0 }) {
-  const [displayed, setDisplayed] = useState('')
-  const [done, setDone] = useState(false)
-
-  useEffect(() => {
-    if (!text) return
-    setDisplayed('')
-    setDone(false)
-    const timer = setTimeout(() => {
-      let i = 0
-      const interval = setInterval(() => {
-        i++
-        setDisplayed(text.slice(0, i))
-        if (i >= text.length) { clearInterval(interval); setDone(true) }
-      }, 18)
-      return () => clearInterval(interval)
-    }, delay)
-    return () => clearTimeout(timer)
-  }, [text, delay])
-
-  return (
-    <span>
-      {displayed}
-      {!done && <span className="animate-typewrite-cursor text-apple-accent">|</span>}
-    </span>
-  )
+const WEATHER_ICONS = {
+  'sun': Sun, 'cloud-sun': CloudSun, 'cloud': Cloud, 'fog': CloudFog,
+  'drizzle': CloudRain, 'rain': CloudRain, 'rain-heavy': CloudRain,
+  'snow': CloudSnow, 'thunderstorm': CloudLightning,
 }
 
-function HabitProgressRing({ done, total }) {
-  const pct = total > 0 ? done / total : 0
-  const radius = 48
-  const circumference = 2 * Math.PI * radius
-  const offset = circumference * (1 - pct)
-
-  return (
-    <div className="flex flex-col items-center">
-      <svg width="120" height="120" viewBox="0 0 120 120">
-        <circle cx="60" cy="60" r={radius} fill="none" stroke="var(--bg-surface)" strokeWidth="8" />
-        <motion.circle
-          cx="60" cy="60" r={radius} fill="none" stroke="var(--accent)" strokeWidth="8"
-          strokeLinecap="round" strokeDasharray={circumference}
-          initial={{ strokeDashoffset: circumference }}
-          animate={{ strokeDashoffset: offset }}
-          transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
-          transform="rotate(-90 60 60)"
-        />
-      </svg>
-      <div className="absolute flex flex-col items-center">
-        <span className="text-heading font-bold text-apple-text tabular-nums">{Math.round(pct * 100)}%</span>
-        <span className="text-micro text-apple-muted">habits</span>
-      </div>
-    </div>
-  )
+const WIDGET_CONFIG = {
+  'ai-briefing': { colSpan: 'lg:col-span-7', label: 'AI Briefing', icon: Brain },
+  'revenue-pipeline': { colSpan: 'lg:col-span-5', label: 'Revenue & Pipeline', icon: TrendingUp },
+  'top-priority': { colSpan: 'lg:col-span-3', label: 'Top Priority', icon: Star },
+  'today-stats': { colSpan: 'lg:col-span-3', label: "Today's Stats", icon: Target },
+  'prayer-times': { colSpan: 'lg:col-span-3', label: 'Prayer Times', icon: ClockIcon },
+  'quick-check': { colSpan: 'lg:col-span-3', label: 'Quick Check', icon: Activity },
+  'latest-journal': { colSpan: 'lg:col-span-4', label: 'Latest Journal', icon: BookOpen },
+  'daily-review': { colSpan: 'lg:col-span-4', label: 'Daily Review', icon: Brain },
+  'quick-overview': { colSpan: 'lg:col-span-4', label: 'Quick Overview', icon: Sparkles },
 }
 
-function FinanceSparkline({ transactions }) {
-  const days = useMemo(() => {
-    const result = []
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      const dateStr = d.toISOString().split('T')[0]
-      const dayTx = transactions.filter(t => t.date === dateStr)
-      const income = dayTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-      const expense = dayTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
-      result.push({ date: dateStr, income, expense })
-    }
-    return result
-  }, [transactions])
-
-  const maxVal = Math.max(...days.map(d => Math.max(d.income, d.expense, 1)))
-  const w = 200; const h = 50
-  const incomePoints = days.map((d, i) => `${(i / (days.length - 1)) * w},${h - (d.income / maxVal) * h}`).join(' ')
-  const expensePoints = days.map((d, i) => `${(i / (days.length - 1)) * w},${h - (d.expense / maxVal) * h}`).join(' ')
-
-  const net = days.reduce((s, d) => s + d.income - d.expense, 0)
-
-  return (
-    <div>
-      <div className="flex items-baseline gap-1.5 mb-2">
-        <span className="text-heading font-bold text-apple-text" style={{ color: net >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-          {net >= 0 ? '+' : ''}{net.toFixed(0)} MAD
-        </span>
-        <span className="text-micro text-apple-muted">7d net</span>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto">
-        <polyline fill="none" stroke="var(--success)" strokeWidth="1.5" strokeOpacity="0.6" points={incomePoints} />
-        <polyline fill="none" stroke="var(--danger)" strokeWidth="1.5" strokeOpacity="0.6" points={expensePoints} />
-      </svg>
-      <div className="flex justify-between text-micro text-apple-muted mt-1">
-        <span>{days[0]?.date?.slice(5)}</span>
-        <span>{days[days.length - 1]?.date?.slice(5)}</span>
-      </div>
-    </div>
-  )
+const WIDGET_COMPONENTS = {
+  'ai-briefing': AIBriefing,
+  'revenue-pipeline': RevenuePipeline,
+  'top-priority': TopPriority,
+  'today-stats': TodayStats,
+  'prayer-times': PrayerTimes,
+  'quick-check': QuickCheck,
+  'latest-journal': LatestJournal,
+  'daily-review': DailyReview,
+  'quick-overview': QuickOverview,
 }
 
-function ParallaxCard({ children, className = '' }) {
-  const ref = useRef(null)
-  const x = useMotionValue(0); const y = useMotionValue(0)
-  const rotateX = useTransform(y, [-0.5, 0.5], [3, -3])
-  const rotateY = useTransform(x, [-0.5, 0.5], [-3, 3])
-
-  function handleMouse(e) {
-    const rect = ref.current?.getBoundingClientRect()
-    if (!rect) return
-    x.set((e.clientX - rect.left) / rect.width - 0.5)
-    y.set((e.clientY - rect.top) / rect.height - 0.5)
+function SortableWidget({ id, children }) {
+  const editMode = useDashboardStore((s) => s.editMode)
+  const toggleHidden = useDashboardStore((s) => s.toggleHidden)
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const config = WIDGET_CONFIG[id]
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.3 : 1,
+    position: 'relative',
+    zIndex: isDragging ? 50 : 'auto',
   }
-
-  function handleLeave() { x.set(0); y.set(0) }
-
   return (
-    <motion.div ref={ref} onMouseMove={handleMouse} onMouseLeave={handleLeave}
-      style={{ rotateX, rotateY, perspective: 800 }}
-      className={`transition-shadow duration-200 ${className}`}
-    >
+    <div ref={setNodeRef} style={style} className={`${config?.colSpan || ''}`}>
+      {editMode && (
+        <div className="flex items-center gap-1.5 mb-2 px-1 py-0.5 rounded-lg" style={{ background: 'var(--bg-surface)' }}>
+          <button {...attributes} {...listeners}
+            className="p-0.5 rounded cursor-grab active:cursor-grabbing hover:opacity-80"
+            style={{ color: 'var(--accent)' }}
+          >
+            <GripVertical size={14} />
+          </button>
+          <span className="text-micro font-medium flex-1" style={{ color: 'var(--accent)' }}>
+            {config?.label || id}
+          </span>
+          <button onClick={() => toggleHidden(id)}
+            className="p-0.5 rounded hover:opacity-80"
+            style={{ color: 'var(--text-muted)' }}
+            title="Hide widget"
+          >
+            <EyeOff size={13} />
+          </button>
+        </div>
+      )}
       {children}
-    </motion.div>
+    </div>
   )
 }
 
 export default function Dashboard() {
   const today = getTodayStr()
-  const clock = useLiveClock()
   const { prayerTimes, nextPrayer, countdown } = usePrayerTimes(today)
-  const { events } = useGoogleCalendar(today)
+  useGoogleCalendar(today)
   const tasks = useTaskStore(s => s.tasks)
-  const fetchTasks = useTaskStore(s => s.fetchTasks)
   const todayPrayers = usePrayerStore(s => s.todayPrayers)
-  const fetchTodayPrayers = usePrayerStore(s => s.fetchTodayPrayers)
-  const fetchFajrStreak = usePrayerStore(s => s.fetchFajrStreak)
   const fajrStreak = usePrayerStore(s => s.fajrStreak)
   const todayHabits = useHabitStore(s => s.todayHabits)
   const habitsStats = useHabitStore(s => s.stats)
-  const fetchToday = useHabitStore(s => s.fetchToday)
   const toggleLog = useHabitStore(s => s.toggleLog)
-  const fetchHabitsStats = useHabitStore(s => s.fetchStats)
   const clients = useAgencyStore(s => s.clients)
-  const fetchClients = useAgencyStore(s => s.fetchClients)
-  const todayReviewEntry = useReviewStore(s => s.todayReview)
-  const fetchTodayReview = useReviewStore(s => s.fetchToday)
+  const { data: todayReviewEntry } = useTodayReview(today)
   const transactions = useFinanceStore(s => s.transactions)
-  const fetchTransactions = useFinanceStore(s => s.fetchTransactions)
-  const entries = useJournalStore(s => s.entries)
-  const fetchEntries = useJournalStore(s => s.fetchEntries)
+  const { data: entries = [] } = useJournalEntries()
+
+  useTasks(); useTodayHabits(); useHabitStats(); useAgencyClients(); useTransactions()
+
   const briefing = useAIStore(s => s.briefing)
   const briefingLoading = useAIStore(s => s.briefingLoading)
   const getBriefing = useAIStore(s => s.getBriefing)
 
   const [reviewOpen, setReviewOpen] = useState(false)
-  const [userName, setUserName] = useState('Othmane')
   const [briefingLoaded, setBriefingLoaded] = useState(false)
+  const [clockFullscreen, setClockFullscreen] = useState(false)
+  const [mousePos, setMousePos] = useState({ x: 0.5, y: 0.5 })
+  const heroRef = useRef(null)
 
-  useEffect(() => {
-    fetch('/api/settings').then(r => r.json()).then(s => {
-      if (s.user_name) setUserName(s.user_name)
-    }).catch(() => {})
-  }, [])
+  const { data: weather, isLoading: weatherLoading } = useWeather()
 
-  useEffect(() => {
-    Promise.allSettled([
-      fetchTasks(), fetchTodayPrayers(), fetchToday(), fetchClients(), fetchTransactions(),
-      fetchEntries(),
-    ]).catch(() => {})
-    fetchFajrStreak()?.catch?.(() => {})
-    fetchHabitsStats()?.catch?.(() => {})
-    fetchTodayReview(today)?.catch?.(() => {})
-  }, [])
+  const widgetOrder = useDashboardStore((s) => s.widgetOrder)
+  const hiddenWidgets = useDashboardStore((s) => s.hiddenWidgets)
+  const editMode = useDashboardStore((s) => s.editMode)
+  const toggleEditMode = useDashboardStore((s) => s.toggleEditMode)
+  const moveWidget = useDashboardStore((s) => s.moveWidget)
+  const toggleHidden = useDashboardStore((s) => s.toggleHidden)
+  const resetDefault = useDashboardStore((s) => s.resetDefault)
 
-  useEffect(() => {
-    if (!briefing && !briefingLoaded && !briefingLoading) {
-      getBriefing('dashboard')
-      setBriefingLoaded(true)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  const visibleWidgets = widgetOrder.filter((id) => !hiddenWidgets.includes(id))
+
+  function handleDragEnd(event) {
+    const { active, over } = event
+    if (over && active.id !== over.id) {
+      moveWidget(widgetOrder.indexOf(active.id), widgetOrder.indexOf(over.id))
     }
+  }
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => { const r = await fetch('/api/settings'); if (r.status === 401) return null; if (!r.ok) throw Error(); return r.json() },
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    if (!briefing && !briefingLoaded && !briefingLoading) {
+      const cached = sessionStorage.getItem('briefing-cache')
+      const cachedTime = sessionStorage.getItem('briefing-cache-time')
+      if (cached && cachedTime && Date.now() - parseInt(cachedTime) < 300000) {
+        useAIStore.setState({ briefing: cached, briefingLoaded: true })
+      } else {
+        getBriefing('dashboard')
+      }
+      if (!cancelled) setBriefingLoaded(true)
+    }
+    return () => { cancelled = true }
   }, [briefing, briefingLoaded, briefingLoading])
 
-  const topPriority = useMemo(() => tasks.find(t => t.is_top_priority), [tasks])
-  const urgentTasks = useMemo(() => tasks.filter(t => t.category === 'urgent' && t.status !== 'done').slice(0, 3), [tasks])
-  const tasksDoneToday = useMemo(() => tasks.filter(t => t.status === 'done' && t.completed_at?.startsWith(today)).length, [tasks])
-  const habitsDone = useMemo(() => todayHabits.filter(h => h.done_today).length, [todayHabits])
-  const daysBuilding = getDaysSince('2026-01-03')
+  useEffect(() => {
+    if (briefing) {
+      sessionStorage.setItem('briefing-cache', briefing)
+      sessionStorage.setItem('briefing-cache-time', String(Date.now()))
+    }
+  }, [briefing])
 
+  const topPriority = useMemo(() => tasks?.find(t => t.is_top_priority), [tasks])
+  const urgentTasks = useMemo(() => (tasks || []).filter(t => t.category === 'urgent' && t.status !== 'done').slice(0, 3), [tasks])
+  const tasksDoneToday = useMemo(() => (tasks || []).filter(t => t.status === 'done' && t.completed_at?.startsWith(today)).length, [tasks])
+  const habitsDone = useMemo(() => (todayHabits || []).filter(h => h.done_today).length, [todayHabits])
+  const daysBuilding = getDaysSince('2026-01-03')
   const latestEntry = useMemo(() => entries?.[0] || null, [entries])
   const randomMotivation = useMemo(() => motivations[Math.floor(Math.random() * motivations.length)], [])
+  const totalTasks = (tasks || []).length || 1
+  const prayerDone = todayPrayers?.filter(p => p?.done).length ?? 0
+  const greeting = getGreeting()
+  const greetingIcon = greeting === 'Good morning' ? Sunrise : greeting === 'Good afternoon' ? Sun : greeting === 'Good evening' ? Sunset : Moon
 
+  const handleMouseMove = useCallback((e) => {
+    if (!heroRef.current) return
+    const rect = heroRef.current.getBoundingClientRect()
+    setMousePos({
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height,
+    })
+    heroRef.current.style.setProperty('--mouse-x', ((e.clientX - rect.left) / rect.width * 100) + '%')
+    heroRef.current.style.setProperty('--mouse-y', ((e.clientY - rect.top) / rect.height * 100) + '%')
+  }, [])
 
+  const widgetProps = {
+    topPriority, urgentTasks,
+    tasksDoneToday, totalTasks,
+    habitsDone, todayHabits, habitsStats, toggleLog,
+    prayerDone, prayerTimes, nextPrayer, countdown, fajrStreak,
+    clients, transactions,
+    latestEntry, randomMotivation,
+    todayReviewEntry,
+    briefing, briefingLoading,
+    today,
+  }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="relative">
-        <div className="absolute inset-0 opacity-[0.03] pointer-events-none"
-          style={{ background: 'var(--gradient-accent)', backgroundSize: '200% 200%' }}
-        />
-        <div className="relative max-w-7xl mx-auto px-6 py-5 space-y-4">
-          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="flex items-start justify-between">
-            <div>
-              <h1 className="text-hero font-semibold text-apple-text tracking-tight">
-                {getGreeting()}, {userName}
-              </h1>
-              <div className="flex items-center gap-3 mt-1">
-                <span className="text-body text-apple-muted">{getFormattedDate()}</span>
-                <span className="text-body font-mono text-apple-muted font-medium tabular-nums">{clock.toLocaleTimeString()}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-small text-apple-muted bg-apple-glass border border-apple-glass-border rounded-full px-3 py-1.5 backdrop-blur-xl">
-              <Flame size={13} className="text-apple-amber" />
-              <span>{daysBuilding} days building</span>
-            </div>
-          </motion.div>
-
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <StatCard value={`${tasksDoneToday}/${tasks.length}`} label="Tasks done today" icon={Target} />
-            <StatCard value={`${habitsDone}/${todayHabits.length}`} label="Habits checked" icon={Sparkles} />
-            <StatCard value={habitsStats?.weekCompletion ? `${habitsStats.weekCompletion}%` : '—'} label="Week completion" icon={BarChart3} />
-            <StatCard value={daysBuilding} label="Days building" icon={Flame} />
-          </motion.div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-12 gap-4">
-            <motion.div {...bentoCard} transition={{ delay: 0.1 }} className="lg:col-span-5 bg-apple-card border border-apple-border rounded-xl p-5 overflow-hidden relative">
-              <div className="absolute inset-0 opacity-[0.03] animate-gradient-shift pointer-events-none" style={{ background: 'var(--gradient-accent)', backgroundSize: '200% 200%' }} />
-              <div className="relative">
-                <div className="flex items-center gap-2 mb-3">
-                  <Brain size={15} className="text-apple-purple" />
-                  <span className="text-small font-semibold text-apple-text">AI Daily Briefing</span>
-                  {briefingLoading && <RefreshCw size={12} className="animate-spin text-apple-muted" />}
-                </div>
-                <div className="text-body text-apple-text leading-relaxed min-h-[60px]">
-                  {briefing ? (
-                    <TypewriterText text={briefing} />
-                  ) : briefingLoading ? (
-                    <span className="text-apple-muted animate-pulse">Loading your briefing...</span>
-                  ) : (
-                    <span className="text-apple-muted">Tap the AI button for a personalized daily briefing</span>
-                  )}
-                </div>
-              </div>
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.15 }} className="lg:col-span-3 bg-apple-card border border-apple-border rounded-xl p-5 flex flex-col items-center justify-center relative">
-              <HabitProgressRing done={habitsDone} total={todayHabits.length || 1} />
-              <div className="text-center mt-3">
-                <p className="text-small font-medium text-apple-text">{habitsDone} of {todayHabits.length} habits</p>
-                <p className="text-micro text-apple-muted mt-0.5">{randomMotivation}</p>
-              </div>
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.2 }} className="lg:col-span-4 bg-apple-card border border-apple-border rounded-xl p-5 relative overflow-hidden"
-              style={{ borderLeft: '3px solid var(--accent)' }}
-            >
+    <div className="h-full overflow-y-auto relative">
+      <AmbientParticles count={30} speed={0.6} />
+      <div className="relative max-w-7xl mx-auto px-6 py-5 space-y-4" style={{ zIndex: 1 }}>
+        <motion.div
+          ref={heroRef}
+          onMouseMove={handleMouseMove}
+          {...scrollReveal()}
+          className="hero-ambient relative overflow-hidden rounded-2xl p-6"
+          style={{ background: 'var(--gradient-hero)', border: '1px solid var(--border-color)' }}
+        >
+          <div className="mouse-orb" style={{
+            width: '350px', height: '350px', background: 'var(--accent-glow)',
+            top: '0', left: '0',
+            transform: `translate(${(mousePos.x - 0.5) * 30}px, ${(mousePos.y - 0.5) * 30}px)`,
+            opacity: 0.3,
+          }} />
+          <div className="mouse-orb" style={{
+            width: '250px', height: '250px', background: 'var(--accent-glow)',
+            bottom: '-50px', right: '-50px',
+            transform: `translate(${(mousePos.x - 0.5) * -20}px, ${(mousePos.y - 0.5) * -20}px)`,
+            opacity: 0.2,
+          }} />
+          <div className="absolute inset-0 opacity-[0.04] animate-gradient-shift pointer-events-none" style={{ background: 'var(--gradient-accent)', backgroundSize: '200% 200%', animationDuration: '10s' }} />
+          <div className="relative flex items-start justify-between stack-on-mobile gap-4">
+            <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
-                <Star size={14} className="text-apple-amber" />
-                <span className="text-small font-semibold text-apple-text">Top Priority</span>
+                <div className="pulse-ring">
+                  <div className="animate-wobble">
+                    {greetingIcon && (() => { const Icon = greetingIcon; return <Icon size={22} className="text-[var(--accent)]" /> })()}
+                  </div>
+                </div>
+                <h1 className="text-hero font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+                  <TypewriterText text={`${greeting}, ${settings?.user_name || ''}`} delay={200} />
+                </h1>
               </div>
-              {topPriority ? (
-                <div>
-                  <p className="text-subheading font-semibold text-apple-text leading-snug">{topPriority.title}</p>
-                  <div className="flex items-center gap-2 mt-2">
-                    {topPriority.tag && <span className="badge-gray text-micro">{topPriority.tag}</span>}
-                    <span className="badge-gray text-micro capitalize">{topPriority.priority}</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-body text-apple-muted">Tap ★ on a task to set priority</p>
-              )}
-              {urgentTasks.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-apple-border">
-                  <p className="text-micro font-medium text-apple-red mb-1.5">Urgent</p>
-                  <div className="space-y-1">
-                    {urgentTasks.map(t => (
-                      <div key={t.id} className="flex items-center gap-2 text-small text-apple-text">
-                        <div className="w-1 h-3 rounded-full bg-apple-red/60" />
-                        <span className="truncate">{t.title}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.25 }} className="lg:col-span-4 bg-apple-card border border-apple-border rounded-xl p-5">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-small font-semibold text-apple-text">Prayer Times</span>
+              <div className="flex flex-wrap items-center gap-2.5 mt-1.5">
+                <span className="text-body" style={{ color: 'var(--text-muted)' }}>{getFormattedDate()}</span>
+                <FlipClock size="hero" />
                 {nextPrayer && countdown && (
-                  <span className="flex items-center gap-1 text-micro text-apple-muted bg-apple-surface px-2 py-1 rounded-full">
-                    <Clock size={11} /> {nextPrayer.name} in {countdown}
+                  <span className="flex items-center gap-1.5 text-small px-2.5 py-0.5 rounded-full glass-sm" style={{ color: 'var(--text-muted)' }}>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--accent)', animation: 'pulseDot 2s ease-in-out infinite' }} />
+                    {nextPrayer.name} in <strong style={{ color: 'var(--accent)' }}>{countdown}</strong>
                   </span>
                 )}
               </div>
-              <div className="space-y-0.5">
-                {prayerNames.map((p, i) => (
-                  <PrayerRow key={p} prayerName={p} scheduledTime={prayerTimes?.[p]}
-                    isNext={nextPrayer?.name === p} countdown={nextPrayer?.name === p ? countdown : null} index={i} />
-                ))}
-              </div>
-              <div className="flex items-center gap-3 mt-2 pt-2 text-small text-apple-muted border-t border-apple-border">
-                <span>Done: <strong className="text-apple-text">{todayPrayers?.filter(p => p?.done).length ?? 0}/5</strong></span>
-                {fajrStreak > 0 && <span className="flex items-center gap-1 text-apple-amber"><Flame size={12} /> Fajr: {fajrStreak}d</span>}
-              </div>
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.3 }} className="lg:col-span-4 bg-apple-card border border-apple-border rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <Calendar size={14} className="text-apple-muted" />
-                <span className="text-small font-semibold text-apple-text">Today's Events</span>
-              </div>
-              {events.length > 0 ? (
-                <div className="space-y-1.5">
-                  {events.slice(0, 4).map((event, i) => (
-                    <div key={event.id || i} className="flex items-center gap-2.5 p-1.5 rounded-md hover:bg-apple-surface transition-colors">
-                      <div className="w-0.5 h-6 rounded-full bg-apple-blue/40" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-small font-medium text-apple-text truncate">{event.summary}</div>
-                        <div className="text-micro text-apple-muted">
-                          {event.start ? new Date(event.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-6 text-apple-muted">
-                  <Calendar size={20} className="mb-1.5 opacity-40" />
-                  <span className="text-small">No events today</span>
-                </div>
-              )}
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.35 }} className="lg:col-span-4 bg-apple-card border border-apple-border rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <TrendingUp size={14} className="text-apple-muted" />
-                <span className="text-small font-semibold text-apple-text">Quick Check</span>
-              </div>
-              <div className="space-y-1">
-                {todayHabits.slice(0, 5).map((h, i) => (
-                  <label key={h.id} className="flex items-center gap-2.5 py-1 px-1 rounded-md hover:bg-apple-surface transition-colors cursor-pointer">
-                    <input type="checkbox" checked={h.done_today} onChange={() => toggleLog(h.id, today, !h.done_today)}
-                      className="w-3.5 h-3.5 rounded border-apple-border text-apple-green focus:ring-apple-green/30 cursor-pointer" />
-                    <span className={`text-small flex-1 transition-colors ${h.done_today ? 'line-through text-apple-tertiary' : 'text-apple-text'}`}>{h.name}</span>
-                  </label>
-                ))}
-              </div>
-              {todayHabits.length > 5 && (
-                <p className="text-micro text-apple-muted text-center mt-2">+{todayHabits.length - 5} more</p>
-              )}
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.4 }} className="lg:col-span-4 bg-apple-card border border-apple-border rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <DollarSign size={14} className="text-apple-green" />
-                <span className="text-small font-semibold text-apple-text">Finance</span>
-              </div>
-              <FinanceSparkline transactions={transactions} />
-            </motion.div>
-
-            <motion.div {...bentoCard} transition={{ delay: 0.45 }} className="lg:col-span-4 bg-apple-card border border-apple-border rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <Target size={14} className="text-apple-muted" />
-                <span className="text-small font-semibold text-apple-text">Agency Pulse</span>
-              </div>
-              {clients.length > 0 ? (
-                <div>
-                  <p className="text-body font-medium text-apple-text truncate">{clients[0].name}</p>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <div className="h-1.5 flex-1 bg-apple-surface rounded-full overflow-hidden">
-                      <motion.div initial={{ width: 0 }} animate={{ width: '60%' }} transition={{ duration: 0.6 }} className="h-full bg-apple-accent rounded-full" />
-                    </div>
-                    <span className="text-micro text-apple-muted">3/3mo</span>
-                  </div>
-                  {clients[0].contract_end && <p className="text-micro text-apple-muted mt-1">Expires {clients[0].contract_end}</p>}
-                </div>
-              ) : (
-                <p className="text-small text-apple-muted">No active clients</p>
-              )}
-              <div className="mt-2 pt-2 border-t border-apple-border">
-                <div className="flex items-center justify-between text-small">
-                  <span className="text-apple-muted">Active clients:</span>
-                  <span className="text-apple-text font-medium">{clients.length}</span>
-                </div>
-              </div>
-            </motion.div>
-
-            <ParallaxCard className="lg:col-span-4">
-              <motion.div {...bentoCard} transition={{ delay: 0.5 }} className="bg-apple-card border border-apple-border rounded-xl p-5 h-full"
-                style={{ background: 'var(--gradient-hero)' }}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <BookOpen size={14} className="text-apple-purple" />
-                  <span className="text-small font-semibold text-apple-text">Latest Journal</span>
-                </div>
-                {latestEntry ? (
-                  <div>
-                    <p className="text-small font-medium text-apple-text truncate">{latestEntry.date}</p>
-                    <p className="text-micro text-apple-muted mt-1 line-clamp-3">
-                      {latestEntry.what_happened || 'No content'}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-small text-apple-muted">No entries yet. Start journaling!</p>
-                )}
-              </motion.div>
-            </ParallaxCard>
-          </div>
-
-          <motion.div {...bentoCard} transition={{ delay: 0.55 }} className="bg-apple-card border border-apple-border rounded-xl p-5 relative overflow-hidden">
-            <div className="absolute inset-0 opacity-[0.02] animate-gradient-shift pointer-events-none" style={{ background: 'var(--gradient-success)', backgroundSize: '200% 200%' }} />
-            <div className="relative flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Brain size={15} className="text-apple-purple" />
-                <div>
-                  <span className="text-small font-semibold text-apple-text">Daily Review</span>
-                  <p className="text-micro text-apple-muted mt-0.5">
-                    {todayReviewEntry?.completed ? 'Today reviewed' : 'End your day with reflection'}
-                  </p>
-                </div>
-              </div>
-              <motion.button whileTap={{ scale: 0.97 }} onClick={() => setReviewOpen(true)}
-                className="flex items-center gap-1 px-3 py-1.5 text-small font-medium rounded-lg bg-apple-surface text-apple-text hover:bg-apple-elevated transition-colors"
-              >{todayReviewEntry?.completed ? 'View' : 'Reflect'} <ChevronRight size={13} /></motion.button>
             </div>
-            {todayReviewEntry?.completed && (
-              <div className="grid grid-cols-3 gap-4 mt-3 pt-3 border-t border-apple-border">
-                <div className="text-center">
-                  <div className="text-micro text-apple-muted mb-0.5">Energy</div>
-                  <div className="text-body">{['😴','🙁','😐','😊','🔥'][(todayReviewEntry.energy || 3) - 1]}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-micro text-apple-muted mb-0.5">Wins</div>
-                  <div className="text-small text-apple-text truncate">{todayReviewEntry.wins?.split('\n')[0] || '—'}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-micro text-apple-muted mb-0.5">Tomorrow</div>
-                  <div className="text-small text-apple-text truncate">{todayReviewEntry.tomorrow_focus || '—'}</div>
-                </div>
+            <div className="flex items-center gap-2 stack-on-mobile shrink-0">
+              <div className="weather-card flex items-center gap-2.5">
+                {weatherLoading ? (
+                  <div className="w-6 h-6 rounded-full bg-[var(--bg-surface)] animate-pulse" />
+                ) : weather ? (
+                  <>
+                    {(() => { const Icon = WEATHER_ICONS[weather.icon] || Cloud; return <Icon size={20} className="weather-icon-animated" style={{ color: 'var(--accent)' }} /> })()}
+                    <div className="flex flex-col leading-tight">
+                      <span className="temp-value !text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{weather.temp}°</span>
+                      <span className="text-micro" style={{ color: 'var(--text-muted)' }}>{weather.condition}</span>
+                    </div>
+                  </>
+                ) : null}
               </div>
+              <button onClick={() => getBriefing('dashboard')}
+                className="btn-ripple flex items-center gap-1.5 px-3 py-1.5 rounded-full text-small font-medium hover-scale"
+                style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--accent)' }}
+              ><Sparkles size={13} /> Briefing</button>
+              <button onClick={toggleEditMode}
+                className="btn-ripple flex items-center gap-1.5 px-3 py-1.5 rounded-full text-small font-medium hover-scale"
+                style={{ background: editMode ? 'var(--accent)' : 'var(--bg-surface)', border: '1px solid var(--border-color)', color: editMode ? '#fff' : 'var(--accent)' }}
+              >{editMode ? 'Done' : 'Edit'}</button>
+              <button onClick={() => setClockFullscreen(true)}
+                className="clock-toggle-btn flex items-center gap-1 px-2.5 py-1.5 rounded-full text-small font-medium"
+                style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
+                title="Full-screen clock"
+              ><Maximize2 size={12} /></button>
+              <span className="flex items-center gap-1.5 text-small glass-sm rounded-full px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>
+                <Flame size={12} style={{ color: 'var(--warning)' }} />
+                {daysBuilding} days
+              </span>
+            </div>
+          </div>
+        </motion.div>
+
+        <AnimatePresence>
+          {clockFullscreen && (
+            <motion.div
+              initial={{ opacity: 0, backdropFilter: 'blur(0px)' }}
+              animate={{ opacity: 1, backdropFilter: 'blur(40px)' }}
+              exit={{ opacity: 0, backdropFilter: 'blur(0px)' }}
+              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+              className="clock-fullscreen-overlay"
+              onClick={() => setClockFullscreen(false)}
+            >
+              <div className="flex flex-col items-center gap-8">
+                <FlipClock size="fullscreen" />
+                <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.5 }}
+                  className="text-body" style={{ color: 'var(--text-muted)' }}>{getFormattedDate()}</motion.p>
+                <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
+                  onClick={() => setClockFullscreen(false)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-full text-small font-medium hover-scale"
+                  style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
+                ><Minimize2 size={13} /> Dismiss</motion.button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={visibleWidgets} strategy={verticalListSortingStrategy}>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              {visibleWidgets.map((id) => {
+                const Widget = WIDGET_COMPONENTS[id]
+                return Widget ? (
+                  <SortableWidget key={id} id={id}>
+                    <Suspense fallback={<div className="widget-glass p-5"><div className="h-20 rounded-lg bg-[var(--bg-surface)] animate-pulse" /></div>}>
+                      <Widget {...widgetProps} onOpen={() => setReviewOpen(true)} />
+                    </Suspense>
+                  </SortableWidget>
+                ) : null
+              })}
+            </div>
+          </SortableContext>
+        </DndContext>
+
+        {editMode && (
+          <div className="widget-glass p-4 border-2 border-dashed" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-small font-medium" style={{ color: 'var(--text-muted)' }}>Hidden Widgets ({hiddenWidgets.length})</p>
+              <button onClick={resetDefault}
+                className="btn-ripple flex items-center gap-1 px-2.5 py-1 text-micro rounded-lg hover-scale"
+                style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)' }}
+              ><RotateCcw size={11} /> Reset</button>
+            </div>
+            {hiddenWidgets.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {hiddenWidgets.map((id) => {
+                  const cfg = WIDGET_CONFIG[id]
+                  return (
+                    <button key={id} onClick={() => toggleHidden(id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-small hover-scale btn-ripple"
+                      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)' }}
+                    ><Eye size={13} /> {cfg?.label || id}</button>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-micro italic" style={{ color: 'var(--text-muted)' }}>All widgets are visible.</p>
             )}
-          </motion.div>
+          </div>
+        )}
+
+        <PatternIntelligence />
+
+        <div className="text-center text-micro py-4" style={{ color: 'var(--text-tertiary)' }}>
+          {daysBuilding} days building Life OS · {new Date().getFullYear()}
         </div>
       </div>
       {reviewOpen && <DailyReviewModal onClose={() => setReviewOpen(false)} />}

@@ -1,21 +1,17 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { TrendingUp, TrendingDown, CheckCircle2, Flame, Brain, BookOpen, BarChart3, Sparkles } from 'lucide-react'
-import { useReviewStore } from '../store/reviewStore'
-import { usePomodoroStore } from '../store/pomodoroStore'
+import { TrendingUp, TrendingDown, CheckCircle2, Flame, Brain, BookOpen, BarChart3, Sparkles, Target, Phone, DollarSign, Activity } from 'lucide-react'
+import { useReviewStore, useReviewStats } from '../store/reviewStore'
+import { usePomodoroStats } from '../store/pomodoroStore'
 import { useThemeStore } from '../store/themeStore'
 import { useAIStore } from '../store/aiStore'
+import { useAnalytics } from '../store/reportStore'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
+import { CardSkeleton, SummaryCardSkeleton, ChartSkeleton } from '../components/Skeleton'
 
 function formatPeriod(period) {
   const d = new Date(period)
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
-function formatWeekLabel(period) {
-  const d = new Date(period)
-  const end = new Date(d)
-  end.setDate(end.getDate() + 6)
-  return `${formatPeriod(period)} – ${formatPeriod(end)}`
 }
 
 function getMonday(d) {
@@ -28,23 +24,16 @@ function getMonday(d) {
 
 export default function Reports() {
   const [view, setView] = useState('week')
-  const [periods, setPeriods] = useState([])
   const [selected, setSelected] = useState(null)
 
-  const reviewsFetch = useReviewStore(s => s.fetchToday)
-  const reviewsStats = useReviewStore(s => s.stats)
-  const pomodoroStats = usePomodoroStore(s => s.stats)
-  const fetchPomodoroStats = usePomodoroStore(s => s.fetchStats)
   const theme = useThemeStore(s => s.theme)
-  const isDark = theme === 'dark' || theme === 'monk'
+  const isDark = theme === 'dark' || theme === 'monk' || theme === 'night'
 
-  useEffect(() => {
-    if (reviewsStats) return
-    const end = new Date().toISOString().split('T')[0]
-    const start = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]
-    useReviewStore.getState().fetchStats(start, end).catch(() => {})
-    fetchPomodoroStats(start, end).catch(() => {})
-  }, [])
+  const end = new Date().toISOString().split('T')[0]
+  const start = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]
+  const { data: reviewsStats, isLoading: reviewsLoading } = useReviewStats(start, end)
+  const { data: pomodoroStats, isLoading: pomodoroLoading } = usePomodoroStats(start, end)
+  const { data: analytics, isLoading: analyticsLoading } = useAnalytics(start, end)
 
   const periodData = useMemo(() => {
     const rDays = Array.isArray(reviewsStats?.reviews) ? reviewsStats.reviews : []
@@ -102,12 +91,63 @@ export default function Reports() {
 
   const periodLabel = view === 'day' ? 'Days' : view === 'week' ? 'Weeks' : 'Months'
 
+  const axisColor = isDark ? '#636366' : '#8E8E93'
+  const tooltipBg = isDark ? '#2C2C2E' : '#FFFFFF'
+  const tooltipText = isDark ? '#F5F5F7' : '#1D1D1F'
+
+  const habitsByWeek = useMemo(() => {
+    const data = analytics?.habits?.byWeek || []
+    return data.map(w => ({
+      week: w.week,
+      rate: w.total > 0 ? Math.round((w.done / w.total) * 100) : 0,
+    }))
+  }, [analytics])
+
+  const financeByMonth = useMemo(() => {
+    return (analytics?.financeByMonth || []).map(m => ({
+      ...m,
+      net: (m.income || 0) - (m.expense || 0),
+    }))
+  }, [analytics])
+
+  const outreachByDay = useMemo(() => {
+    return (analytics?.outreachByDay || []).slice(-14).map(o => ({
+      day: o.date?.slice(5),
+      Calls: o.calls_made || 0,
+      DMs: o.dms_sent || 0,
+      Responses: o.responses || 0,
+    }))
+  }, [analytics])
+
+  const tasksByWeek = useMemo(() => {
+    return (analytics?.tasks?.byWeek || []).map(t => ({
+      week: t.week,
+      completed: t.completed || 0,
+    }))
+  }, [analytics])
+
+  const pageLoading = reviewsLoading || pomodoroLoading || analyticsLoading
+
+  if (pageLoading) {
+    return (
+      <div className="max-w-5xl mx-auto p-8 space-y-6">
+        <div className="h-8 bg-[var(--bg-surface)] rounded w-24 animate-pulse" />
+        <div className="flex gap-1 p-1 rounded-lg bg-apple-surface/50 w-fit">
+          {[1,2,3].map(i => <div key={i} className="h-8 w-16 bg-[var(--bg-surface)] rounded-md animate-pulse" />)}
+        </div>
+        <SummaryCardSkeleton />
+        <ChartSkeleton />
+        <ChartSkeleton />
+      </div>
+    )
+  }
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-5xl mx-auto p-8 space-y-6">
       <motion.h1 initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="text-heading font-semibold ">Reports</motion.h1>
 
       {/* View Selector */}
-      <div className="flex gap-1 p-1 rounded-lg bg-apple-surface/50 mb-6 w-fit">
+      <div className="flex gap-1 p-1 rounded-lg bg-apple-surface/50 mb-6 w-fit overflow-x-auto scrollable-x">
         {['day', 'week', 'month'].map(v => (
           <motion.button key={v} whileTap={{ scale: 0.95 }}
             onClick={() => setView(v)}
@@ -133,7 +173,7 @@ export default function Reports() {
         ))}
       </div>
 
-      {/* Trend Bars */}
+      {/* Energy & Pomodoros Trend */}
       <div className="card p-4">
         <div className="flex items-center gap-2 mb-4">
           <BarChart3 size={18} className="text-apple-blue" />
@@ -148,8 +188,8 @@ export default function Reports() {
               const pct = (p.totalPomodoros / maxPoms) * 100
               const showLabel = view === 'month' ? (p.date.slice(0, 7)) : formatPeriod(p.date)
               return (
-                <motion.div key={`${p.date}-${i}`} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0, transition: { delay: i * 0.03 } }}
-                  className="flex items-center gap-3 group cursor-pointer" onClick={() => setSelected(selected === p.date ? null : p.date)}>
+                <motion.div key={p.date} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0, transition: { delay: i * 0.03 } }}
+                  className="flex items-center gap-3 group cursor-pointer stack-on-mobile" onClick={() => setSelected(selected === p.date ? null : p.date)}>
                   <div className="w-20 text-right text-micro text-apple-muted shrink-0">{showLabel}</div>
                   <div className="flex-1 h-6 bg-apple-surface rounded-md overflow-hidden relative">
                     <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }}
@@ -170,6 +210,95 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      {/* Habit Completion Rate */}
+      {habitsByWeek.length > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Activity size={18} className="text-apple-green" />
+            <span className="text-small font-semibold ">Habit Completion Rate</span>
+          </div>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={habitsByWeek}>
+                <defs>
+                  <linearGradient id="habitGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#34C759" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#34C759" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="week" tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} />
+                <Tooltip contentStyle={{ background: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipText }} formatter={v => [`${v}%`, 'Rate']} />
+                <Area type="monotone" dataKey="rate" stroke="#34C759" fill="url(#habitGrad)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Task Completion Velocity */}
+      {tasksByWeek.length > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Target size={18} className="text-apple-blue" />
+            <span className="text-small font-semibold ">Task Completion Velocity</span>
+          </div>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={tasksByWeek}>
+                <XAxis dataKey="week" tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipText }} />
+                <Bar dataKey="completed" fill="#5B5BD6" radius={[4, 4, 0, 0]} name="Tasks Done" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Income vs Expense */}
+      {financeByMonth.length > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <DollarSign size={18} className="text-apple-amber" />
+            <span className="text-small font-semibold ">Income vs Expenses</span>
+          </div>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={financeByMonth}>
+                <XAxis dataKey="month" tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipText }} />
+                <Bar dataKey="income" fill="#34C759" radius={[4, 4, 0, 0]} name="Income" />
+                <Bar dataKey="expense" fill="#FF3B30" radius={[4, 4, 0, 0]} name="Expenses" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Outreach Activity */}
+      {outreachByDay.length > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Phone size={18} className="text-apple-purple" />
+            <span className="text-small font-semibold ">Cold Outreach (Last 14 Days)</span>
+          </div>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={outreachByDay}>
+                <XAxis dataKey="day" tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: axisColor }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipText }} />
+                <Bar dataKey="Calls" fill="#FF9F0A" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="DMs" fill="#AF52DE" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Responses" fill="#34C759" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* Detail */}
       {selected && (
@@ -206,7 +335,8 @@ export default function Reports() {
 }
 
 function AIMoodResult() {
-  const { analysis, loading } = useAIStore()
+  const analysis = useAIStore(s => s.analysis)
+  const loading = useAIStore(s => s.loading)
   const theme = useThemeStore(s => s.theme)
   if (loading) return <div className="animate-shimmer h-12 rounded-md" />
   if (!analysis) return <p className="text-small text-apple-muted">Click "Analyze" to get AI-powered insights from your journal entries</p>

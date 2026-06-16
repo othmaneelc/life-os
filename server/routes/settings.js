@@ -1,5 +1,7 @@
 const express = require('express')
+const { handleError } = require('../middleware/errorHandler')
 const { query, run } = require('../db/database')
+const { validate } = require('../middleware/validate')
 
 const router = express.Router()
 
@@ -11,16 +13,30 @@ router.get('/', (req, res) => {
       settings[row.key] = row.value
     }
     res.json(settings)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
-router.put('/', (req, res) => {
+const NOTIF_MAP = {
+  push_prayer: 'prayer_reminder',
+  push_summary: 'daily_briefing',
+  push_review: 'daily_review',
+  push_weekly: 'weekly_report',
+}
+
+router.put('/', validate({
+  groq_key: [{ pattern: /^(gsk_|$)/ }],
+  user_name: [{ maxLength: 100 }],
+}), (req, res) => {
   try {
     const entries = req.body
     for (const [key, value] of Object.entries(entries)) {
+      if (/^(google_|session_|db_)/.test(key)) continue
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(value)])
+      const notifType = NOTIF_MAP[key]
+      if (notifType) {
+        run('INSERT OR REPLACE INTO notification_settings (id, type, enabled, time_offset_minutes) VALUES (?, ?, ?, 0)',
+          [require('uuid').v4(), notifType, value !== '0' ? 1 : 0])
+      }
     }
     const rows = query('SELECT * FROM settings')
     const settings = {}
@@ -28,9 +44,7 @@ router.put('/', (req, res) => {
       settings[row.key] = row.value
     }
     res.json(settings)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/export', (req, res) => {
@@ -39,12 +53,10 @@ router.post('/export', (req, res) => {
       'habit_logs', 'clients', 'prospects', 'revenue', 'outreach_log', 'schedule_blocks', 'settings']
     const data = {}
     for (const table of tables) {
-      data[table] = query(`SELECT * FROM ${table}`)
+      data[table] = query(`SELECT * FROM "${table}"`)
     }
     res.json(data)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/google-oauth', (req, res) => {
@@ -71,7 +83,7 @@ router.post('/google-oauth', (req, res) => {
       disconnectGoogle()
     } catch (e) {}
     res.json({ success: true, message: 'Google OAuth configured and applied.' })
-  } catch (err) { res.status(500).json({ error: err.message }) }
+  } catch (err) { handleError(res, err) }
 })
 
 router.post('/clear', (req, res) => {
@@ -81,12 +93,10 @@ router.post('/clear', (req, res) => {
       'daily_reviews', 'pomodoro_sessions', 'kb_documents', 'kb_fts', 'content_log', 'gbp_metrics']
     const existing = query("SELECT name FROM sqlite_master WHERE type='table'").map(r => r.name)
     for (const table of tableList) {
-      if (existing.includes(table)) run(`DELETE FROM ${table}`)
+      if (existing.includes(table)) run(`DELETE FROM "${table}"`)
     }
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { handleError(res, err) }
 })
 
 module.exports = router

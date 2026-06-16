@@ -1,5 +1,6 @@
 const { google } = require('googleapis')
 const { v4: uuidv4 } = require('uuid')
+const logger = require('./logger')
 
 async function syncTasks(auth) {
   const service = google.tasks({ version: 'v1', auth })
@@ -42,7 +43,7 @@ async function syncTasks(auth) {
       run('UPDATE tasks SET google_task_id = ? WHERE id = ?', [created.data.id, t.id])
       pushed++
     } catch (err) {
-      console.error('Failed to push task:', err.message)
+      logger.error({ err }, 'Failed to push task')
     }
   }
 
